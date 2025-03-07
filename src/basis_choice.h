@@ -416,11 +416,11 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
   // --- this function assumes ---
   // row_permutation_ is empty (all zeros, not a correct permutation)
   // cols_permutation_ contains the final permutation
-  // lower_triangular_rows_ is empty
-  // lower_triangular_cols_ is empty
-  // upper_triangular_rows_ is empty
-  // upper_triangular_cols_ is empty
-  // upper_diagonal_ is all zeros
+  // lower_triangular_rows_ is final size with empty elements
+  // lower_triangular_cols_ is final size with empty elements
+  // upper_triangular_rows_ is final size with empty elements
+  // upper_triangular_cols_ is final size with empty elements
+  // upper_diagonal_ is final size with undefined elements
   // -----------------------------
 
   this->row_permutation_.SetIdentity();
