@@ -63,6 +63,8 @@ private:
   const Index end_;
 };
 
+namespace basis_choice {
+
 inline std::vector<SparseVector>
 ComputeRowRepresentation(const std::vector<SparseVector> &cols, Index nrows) {
   std::vector<SparseVector> rows(nrows);
@@ -167,6 +169,11 @@ public:
   std::vector<Scalar> swap_;
 };
 
+enum FactorizeResult {
+  kOk,
+  kSingular,
+};
+
 class BasisChoice {
 public:
   BasisChoice(Index dimension, Index nvectors)
@@ -176,14 +183,38 @@ public:
         upper_diagonal_(dimension), shared_(dimension, nvectors) {}
 
   // factorize in terms of input vectors
-  void Factorize(const std::vector<SparseVector> &vectors) {
+  FactorizeResult Factorize(const std::vector<SparseVector> &vectors) {
     const std::vector<SparseVector> row_rep =
         ComputeRowRepresentation(vectors, this->dimension_);
-    this->FactorizeCT(row_rep);
+    return this->FactorizeCT(row_rep);
   }
 
   // factorize in terms of rows of input vectors
-  void FactorizeCT(const std::vector<SparseVector> &ct_cols) { assert(false); }
+  FactorizeResult FactorizeCT(const std::vector<SparseVector> &ct_cols) {
+    // compute col permutation
+    this->ComputeQ(ct_cols);
+
+    // compute factorization
+    const FactorizeResult r = this->ComputeLU(ct_cols);
+
+    return r;
+  }
+
+  void ComputeQ(const std::vector<SparseVector> &ct_cols) {
+    // TODO: implement COLAMD
+    std::sort(this->col_permutation_.GetPermutation().begin(),
+              this->col_permutation_.GetPermutation().end(),
+              [&](const Index &lhs, const Index &rhs) -> bool {
+                return ct_cols[lhs].size() <= ct_cols[rhs].size();
+              });
+
+    this->col_permutation_.RestoreInverse();
+    this->col_permutation_.AssertIntegrity();
+  }
+
+  FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_cols) {
+    assert(false);
+  }
 
   // solve Cx'=x
   void SolveInPlace(std::vector<Scalar> &x) const {
@@ -238,5 +269,7 @@ private:
   // shared memory for solves
   mutable SharedMemory shared_;
 };
+
+} // namespace basis_choice
 
 #endif

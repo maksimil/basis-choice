@@ -17,3 +17,6 @@ CMakeUserPresets.json
 
 # executable
 basis-choice
+
+# test_data
+test_data/*.mtx
