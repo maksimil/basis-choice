@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -11,6 +12,23 @@
 #include <vector>
 
 #define LOG_INFO(fmt, args...) fprintf(stdout, fmt, ##args)
+
+class Timer {
+public:
+  using Clock = std::chrono::high_resolution_clock;
+
+  Timer() { this->start_time_ = Clock::now(); }
+
+  double Elapsed() const {
+    const Clock::time_point now = Clock::now();
+    const std::chrono::duration<double, std::micro> duration =
+        now - this->start_time_;
+    return duration.count();
+  }
+
+private:
+  Clock::time_point start_time_;
+};
 
 using Scalar = double;
 using Index = int32_t;
@@ -352,9 +370,9 @@ class BasisChoice {
 public:
   BasisChoice(Index dimension, Index nvectors)
       : dimension_(dimension), nvectors_(nvectors), row_permutation_(nvectors),
-        col_permutation_(dimension), lower_rows_(nvectors),
-        lower_cols_(dimension), upper_rows_(dimension), upper_cols_(dimension),
-        upper_diagonal_(dimension, 0.0), shared_(dimension, nvectors) {}
+        col_permutation_(dimension), lrows_(nvectors), lcols_head_(dimension),
+        lcols_tail_(dimension), urows_(dimension), ucols_(dimension),
+        udiagonal_(dimension, 0.0), shared_(dimension, nvectors) {}
 
   // factorize in terms of input vectors
   // priority is defined for each col (smaller value = higher priority)
@@ -383,7 +401,7 @@ public:
     std::sort(this->col_permutation_.GetPermutation().begin(),
               this->col_permutation_.GetPermutation().end(),
               [&](const Index &lhs, const Index &rhs) -> bool {
-                return ct_cols[lhs].size() <= ct_cols[rhs].size();
+                return ct_cols[lhs].size() < ct_cols[rhs].size();
               });
     this->col_permutation_.RestoreInverse();
     this->col_permutation_.AssertIntegrity();
@@ -434,6 +452,8 @@ public:
   // L = (L_1^T L_2^T)^T
   // C' = Q U^T L_1^T
   // L_1 diagonal is unit
+  // L_1 is lower head
+  // L_2 is lower tail
 
   // dimensions
   Index dimension_; // ncols
@@ -444,11 +464,12 @@ public:
   Permutation col_permutation_; // Q
 
   // L, U factors
-  std::vector<SparseVector> lower_rows_;
-  std::vector<SparseVector> lower_cols_;
-  std::vector<SparseVector> upper_rows_;
-  std::vector<SparseVector> upper_cols_;
-  std::vector<Scalar> upper_diagonal_;
+  std::vector<SparseVector> lrows_;
+  std::vector<SparseVector> lcols_head_;
+  std::vector<SparseVector> lcols_tail_;
+  std::vector<SparseVector> urows_;
+  std::vector<SparseVector> ucols_;
+  std::vector<Scalar> udiagonal_;
 
   // shared memory for solves
   mutable SharedMemory shared_;
@@ -475,15 +496,68 @@ inline void PruneZeros(SparseVector &v, Scalar tol) {
   PruneVector(v, [&](Index _, Scalar x) -> bool { return std::abs(x) < tol; });
 }
 
+// set v[j], v[p] <- 0, v[j]
+// if j=p, v[j] <- 0
+// v.index[0] >= j
+inline void LUSwapRemove(SparseVector &v, Index j, Index p) {
+  assert(v.GetIndex()[0] >= j);
+  assert(j <= p);
+
+  const Index mem_p =
+      std::lower_bound(v.GetIndex().begin(), v.GetIndex().end(), p) -
+      v.GetIndex().begin();
+
+  if (v.GetIndex()[0] == j) {
+    if (mem_p < v.size() && v.GetIndex()[mem_p] == p) {
+      std::swap(v.GetValues()[0], v.GetValues()[mem_p]);
+      v.Erase(0);
+    } else {
+      const Scalar value = v.GetValues()[0];
+
+      for (Index k = 0; k < mem_p - 1; k++) {
+        v.GetValues()[k] = v.GetValues()[k + 1];
+        v.GetIndex()[k] = v.GetIndex()[k + 1];
+      }
+
+      v.GetValues()[mem_p - 1] = value;
+      v.GetIndex()[mem_p - 1] = p;
+    }
+  } else {
+    if (mem_p < v.size() && v.GetIndex()[mem_p] == p) {
+      v.Erase(mem_p);
+    }
+  }
+}
+
+inline void LUBVectorCompute(SparseVector &b_vector,
+                             const std::vector<SparseVector> &lrows,
+                             const std::vector<SparseVector> &lcols_tail,
+                             const SparseVector &ucol, const Index j,
+                             SharedMemory &shared) {
+  Index mem_idx = 0;
+  for (Index i = j; i < lrows.size(); i++) {
+    const Scalar product = lrows[i] * ucol;
+
+    if (mem_idx < b_vector.size() && b_vector.GetIndex()[mem_idx] == i) {
+      b_vector.GetValues()[mem_idx] -= product;
+      mem_idx++;
+    } else {
+      b_vector.PushBack(i, -product);
+    }
+  }
+
+  SortSparse(b_vector, lrows.size(), shared.dirty_index_, shared.dirty_scalar_);
+  PruneZeros(b_vector, kEps);
+}
+
 // Solve the first n rows and cols of L x' = x for sparse LU factorization
 // lcols spans only first n rows of L
 // lrows spans at least the first n rows L
 //
 // Works only with the first n elements of x
-inline void FactorizationFTranL(const std::vector<SparseVector> &lcols,
-                                const std::vector<SparseVector> &lrows,
-                                const Index n, SparseVector &x,
-                                SharedMemory &shared) {
+inline void LUFTranL(const std::vector<SparseVector> &lcols,
+                     const std::vector<SparseVector> &lrows, const Index n,
+                     SparseVector &x, SharedMemory &shared) {
 #ifndef NDEBUG
   const SparseVector original_x = x;
   const std::vector<Scalar> original_x_dense = original_x.ToDense(lrows.size());
@@ -570,19 +644,22 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
   // --- this function assumes ---
   // row_permutation_ is any
   // cols_permutation_ contains the final permutation
-  // lower_rows_ is final size with empty elements
-  // lower_cols_ is final size with empty elements
-  // upper_rows_ is final size with empty elements
-  // upper_cols_ is final size with empty elements
-  // upper_diagonal_ is final size with zeros
+  // lrows_ is final size with empty elements
+  // lcols_head_ is final size with empty elements
+  // lcols_tail_ is final size with empty elements
+  // urows_ is final size with empty elements
+  // ucols_ is final size with empty elements
+  // udiagonal_ is final size with zeros
   // -----------------------------
 
   this->row_permutation_.SetIdentity();
 
   for (Index j = 0; j < this->dimension_; j++) {
+    Timer step_timer;
+
     // get the next column, permute it and apply gaussian steps
 
-    SparseVector &upper_col = this->upper_cols_[j];
+    SparseVector &upper_col = this->ucols_[j];
     upper_col = ct_cols[this->col_permutation_.Permute(j)];
 
     // LOG_INFO("Incoming: ");
@@ -594,8 +671,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     PermuteSparse(upper_col, this->row_permutation_.GetPermutation(),
                   this->shared_.dirty_index_, this->shared_.dirty_scalar_);
 
-    FactorizationFTranL(this->lower_cols_, this->lower_rows_, j, upper_col,
-                        this->shared_);
+    LUFTranL(this->lcols_head_, this->lrows_, j, upper_col, this->shared_);
 
     // LOG_INFO("Incoming: ");
     // for (SvIterator el(upper_col); el; ++el) {
@@ -623,21 +699,10 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     // compute the b_vector
 
     // TODO: do a symbolic phase
-    Index mem_idx = 0;
-    for (Index i = j; i < this->nvectors_; i++) {
-      const Scalar product = this->lower_rows_[i] * upper_col;
-
-      if (mem_idx < b_vector.size() && b_vector.GetIndex()[mem_idx] == i) {
-        b_vector.GetValues()[mem_idx] -= product;
-        mem_idx++;
-      } else {
-        b_vector.PushBack(i, -product);
-      }
-    }
-
-    SortSparse(b_vector, this->nvectors_, this->shared_.dirty_index_,
-               this->shared_.dirty_scalar_);
-    PruneZeros(b_vector, kEps);
+    Timer b_vector_timer;
+    LUBVectorCompute(b_vector, this->lrows_, this->lcols_tail_, upper_col, j,
+                     this->shared_);
+    const double b_vector_elapsed = b_vector_timer.Elapsed();
 
     // pivot choice
 
@@ -660,7 +725,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // split off upper diagonal
 
-    this->upper_diagonal_[j] = b_vector.GetValues()[mem_pivot];
+    this->udiagonal_[j] = b_vector.GetValues()[mem_pivot];
     // LOG_INFO("ujj = %f\n", this->upper_diagonal_[j]);
 
     if (b_vector.GetIndex()[0] == j) {
@@ -682,27 +747,34 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     this->row_permutation_.AssertIntegrity();
 
     // permute lower rows
-    std::swap(this->lower_rows_[j], this->lower_rows_[pivot]);
+    std::swap(this->lrows_[j], this->lrows_[pivot]);
 
     // add a new row to lower cols
-    for (SvIterator el(this->lower_rows_[j]); el; ++el) {
+    for (SvIterator el(this->lrows_[j]); el; ++el) {
       assert(el.index() < j);
-      this->lower_cols_[el.index()].PushBack(j, el.value());
+      this->lcols_head_[el.index()].PushBack(j, el.value());
+      LUSwapRemove(this->lcols_tail_[el.index()], j, pivot);
     }
 
     // add a new col to lower rows
     for (SvIterator el(b_vector); el; ++el) {
       assert(el.index() > j);
-      this->lower_rows_[el.index()].PushBack(j, el.value() /
-                                                    this->upper_diagonal_[j]);
+      this->lrows_[el.index()].PushBack(j, el.value() / this->udiagonal_[j]);
+      this->lcols_tail_[j].PushBack(el.index(),
+                                    el.value() / this->udiagonal_[j]);
     }
+
+    const double step_elapsed = step_timer.Elapsed();
+
+    LOG_INFO("step = %f ms, b_vector = %f ms\n", step_elapsed / 1000.0,
+             b_vector_elapsed / 1000.0);
   }
 
   // compute upper rows
   for (Index j = 0; j < this->dimension_; j++) {
-    for (SvIterator el(this->upper_cols_[j]); el; ++el) {
+    for (SvIterator el(this->ucols_[j]); el; ++el) {
       assert(el.index() < this->dimension_);
-      this->upper_rows_[el.index()].PushBack(j, el.value());
+      this->urows_[el.index()].PushBack(j, el.value());
     }
   }
 
@@ -720,15 +792,15 @@ BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
 
     const Index pfov = this->row_permutation_.Permute(j);
     std::vector<Scalar> dense_lower =
-        this->lower_rows_[pfov].ToDense(this->dimension_);
+        this->lrows_[pfov].ToDense(this->dimension_);
     if (pfov < this->dimension_)
       dense_lower[pfov] = 1.0;
 
     for (Index i = 0; i < this->dimension_; i++) {
       const Index qinv = this->col_permutation_.Inverse(i);
       std::vector<Scalar> dense_upper =
-          this->upper_cols_[qinv].ToDense(this->dimension_);
-      dense_upper[qinv] = this->upper_diagonal_[qinv];
+          this->ucols_[qinv].ToDense(this->dimension_);
+      dense_upper[qinv] = this->udiagonal_[qinv];
 
       // lu_value = lrows(pfov(j)) * ucols(qinv(i))
 
@@ -758,21 +830,21 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
   // U is from ucols
   for (Index i = 0; i < this->dimension_; i++) {
     // stats.u_nnz += i;
-    stats.u_nnz += this->upper_cols_[i].size();
+    stats.u_nnz += this->ucols_[i].size();
   }
   stats.u_sparse = Scalar(stats.u_nnz) / u_spaces;
 
   // L is from lrows
   for (Index i = 0; i < this->nvectors_; i++) {
     // stats.l_nnz += std::min(i, this->dimension_);
-    stats.l_nnz += this->lower_rows_[i].size();
+    stats.l_nnz += this->lrows_[i].size();
   }
   stats.l_sparse = Scalar(stats.l_nnz) / (this->nvectors_ * this->dimension_ -
                                           u_spaces - this->dimension_);
 
   // L1 is from lcols
   for (Index i = 0; i < this->dimension_; i++) {
-    stats.l1_nnz += this->lower_cols_[i].size();
+    stats.l1_nnz += this->lcols_head_[i].size();
   }
   stats.l1_sparse = Scalar(stats.l1_nnz) / u_spaces;
 
