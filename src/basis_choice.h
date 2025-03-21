@@ -527,6 +527,8 @@ inline void LUSwapRemove(SparseVector &v, Index j, Index p) {
       v.Erase(mem_p);
     }
   }
+
+  assert(v.GetIndex()[0] > j);
 }
 
 inline void LUBVectorCompute(SparseVector &b_vector,
@@ -534,20 +536,39 @@ inline void LUBVectorCompute(SparseVector &b_vector,
                              const std::vector<SparseVector> &lcols_tail,
                              const SparseVector &ucol, const Index j,
                              SharedMemory &shared) {
-  Index mem_idx = 0;
-  for (Index i = j; i < lrows.size(); i++) {
-    const Scalar product = lrows[i] * ucol;
+  shared.AssertClean();
 
-    if (mem_idx < b_vector.size() && b_vector.GetIndex()[mem_idx] == i) {
-      b_vector.GetValues()[mem_idx] -= product;
-      mem_idx++;
-    } else {
-      b_vector.PushBack(i, -product);
+  std::vector<Index> &memory_index = shared.clean_index_;
+
+  for (Index k = 0; k < b_vector.size(); k++) {
+    memory_index[b_vector.GetIndex()[k]] = k;
+  }
+
+  for (SvIterator u_el(ucol); u_el; ++u_el) {
+    assert(u_el.index() < j);
+
+    for (SvIterator l_el(lcols_tail[u_el.index()]); l_el; ++l_el) {
+      const Index i = l_el.index();
+      const Scalar v = u_el.value() * l_el.value();
+
+      assert(i >= j);
+
+      if (memory_index[i] == -1) {
+        memory_index[i] = b_vector.size();
+        b_vector.PushBack(i, -v);
+      } else {
+        b_vector.GetValues()[memory_index[i]] -= v;
+      }
     }
+  }
+
+  for (Index k = 0; k < b_vector.size(); k++) {
+    memory_index[b_vector.GetIndex()[k]] = -1;
   }
 
   SortSparse(b_vector, lrows.size(), shared.dirty_index_, shared.dirty_scalar_);
   PruneZeros(b_vector, kEps);
+  shared.AssertClean();
 }
 
 // Solve the first n rows and cols of L x' = x for sparse LU factorization
@@ -753,7 +774,11 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     for (SvIterator el(this->lrows_[j]); el; ++el) {
       assert(el.index() < j);
       this->lcols_head_[el.index()].PushBack(j, el.value());
-      LUSwapRemove(this->lcols_tail_[el.index()], j, pivot);
+    }
+
+    // TODO: do this sparsely
+    for (Index k = 0; k < j; k++) {
+      LUSwapRemove(this->lcols_tail_[k], j, pivot);
     }
 
     // add a new col to lower rows
@@ -766,8 +791,8 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     const double step_elapsed = step_timer.Elapsed();
 
-    LOG_INFO("step = %f ms, b_vector = %f ms\n", step_elapsed / 1000.0,
-             b_vector_elapsed / 1000.0);
+    // LOG_INFO("step = %f ms, b_vector = %f ms\n", step_elapsed / 1000.0,
+    //          b_vector_elapsed / 1000.0);
   }
 
   // compute upper rows
