@@ -38,6 +38,10 @@ class SparseVector {
 public:
   SparseVector() : index_(), values_() {}
 
+  SparseVector(Index index, Scalar value) : index_(), values_() {
+    this->PushBack(index, value);
+  }
+
   std::vector<Index> &GetIndex() { return this->index_; }
   const std::vector<Index> &GetIndex() const { return this->index_; }
   std::vector<Scalar> &GetValues() { return this->values_; }
@@ -856,23 +860,16 @@ BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
         vectors[j].ToDense(this->dimension_);
 
     const Index pfov = this->row_permutation_.Permute(j);
-    std::vector<Scalar> dense_lower =
-        this->lrows_[pfov].ToDense(this->dimension_);
-    if (pfov < this->dimension_)
-      dense_lower[pfov] = 1.0;
+    const SparseVector &lrow = this->lrows_[pfov];
 
     for (Index i = 0; i < this->dimension_; i++) {
       const Index qinv = this->col_permutation_.Inverse(i);
-      std::vector<Scalar> dense_upper =
-          this->ucols_[qinv].ToDense(this->dimension_);
-      dense_upper[qinv] = this->udiagonal_[qinv];
-
+      const SparseVector &ucol = this->ucols_[qinv];
       // lu_value = lrows(pfov(j)) * ucols(qinv(i))
 
-      Scalar lu_value = 0.0;
-      for (Index k = 0; k < this->dimension_; k++) {
-        lu_value += dense_lower[k] * dense_upper[k];
-      }
+      Scalar lu_value = (lrow * ucol) + (SparseVector(pfov, 1.0) * ucol) +
+                        (lrow * SparseVector(qinv, this->udiagonal_[qinv])) +
+                        (pfov == qinv ? this->udiagonal_[qinv] : 0.0);
 
       const Scalar c_value = dense_input[i];
 
@@ -881,6 +878,10 @@ BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
                  c_value, c_value - lu_value);
         valid = false;
       }
+    }
+
+    if (j % 1000 == 0) {
+      LOG_INFO("Checked %i/%i cols\n", j + 1, this->nvectors_);
     }
   }
 

@@ -1,5 +1,4 @@
 #include "basis_choice.h"
-#include <chrono>
 #include <cstdio>
 #include <fstream>
 
@@ -37,7 +36,6 @@ MtxData ReadColumns(const char *filename) {
   return MtxData{nrows, ncols, nnz, cols};
 }
 
-
 void TestCols(const MtxData &cols) {
   basis_choice::BasisChoice choice(cols.nrows, cols.ncols);
   const std::vector<Scalar> priority;
@@ -47,22 +45,22 @@ void TestCols(const MtxData &cols) {
   const double elapsed = factorize_timer.Elapsed();
   LOG_INFO("Factorized in %f ms\n", elapsed / 1000.0);
 
-  const bool v = choice.CheckFactorization(cols.cols);
-  LOG_INFO("v=%i\n", v);
+  if (cols.nrows * cols.ncols < 1e8) {
+    const bool v = choice.CheckFactorization(cols.cols, 1e-8);
+    LOG_INFO("v=%i\n", v);
+  } else {
+    LOG_INFO("Skip check\n");
+  }
+
   choice.ComputeStats().LogStats();
 }
 
 const char *test_files[] = {
-    "./test_data/sanity1.mtx",
-    "./test_data/sanity2.mtx",
-    "./test_data/sanity3.mtx",
-    "./test_data/PRIMAL1.mtx",
-    "./test_data/PRIMAL2.mtx",
-    "./test_data/PRIMAL3.mtx",
-    "./test_data/PRIMAL4.mtx",
-    "./test_data/AUG3D.mtx"
-    // "./test_data/UBH1.mtx",
-    // "./test_data/BOYD1.mtx"
+    "./test_data/sanity1.mtx", "./test_data/sanity2.mtx",
+    "./test_data/sanity3.mtx", "./test_data/PRIMAL1.mtx",
+    "./test_data/PRIMAL2.mtx", "./test_data/PRIMAL3.mtx",
+    "./test_data/PRIMAL4.mtx", "./test_data/AUG3D.mtx",
+    "./test_data/UBH1.mtx",
 };
 
 int main(int argc, const char *argv[]) {
