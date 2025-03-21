@@ -255,6 +255,12 @@ inline void SortSparse(SparseVector &v, Index dimension,
 
   index_swap.clear();
   scalar_swap.clear();
+
+#ifndef NDEBUG
+  for (Index i = 1; i < v.size(); i++) {
+    assert(v.GetIndex()[i - 1] < v.GetIndex()[i]);
+  }
+#endif
 }
 
 inline void PermuteSparse(SparseVector &v,
@@ -481,7 +487,7 @@ inline void FactorizationFTranL(const std::vector<SparseVector> &lcols,
       assert(i < n);
       assert(i > j);
 
-      if (memory_index[i] != -1) {
+      if (memory_index[i] == -1) {
         memory_index[i] = x.size();
         x.PushBack(i, 0.0);
         nodes_stack.push_back(i);
@@ -491,13 +497,11 @@ inline void FactorizationFTranL(const std::vector<SparseVector> &lcols,
 
   SortSparse(x, lrows.size(), shared.dirty_index_, shared.dirty_scalar_);
 
-  for (Index k = 0; k < x.size() && x.GetIndex()[k] < n; k++) {
-    memory_index[x.GetIndex()[k]] = k;
-  }
-
   // compute the values
   for (Index k = 0; k < x.size() && x.GetIndex()[k] < n; k++) {
     const Index i = x.GetIndex()[k];
+
+    memory_index[i] = k;
     Scalar &xi = x.GetValues()[k];
 
     for (SvIterator el(lrows[i]); el; ++el) {
