@@ -55,12 +55,24 @@ public:
     values_.erase(values_.begin() + n);
   }
 
+  std::vector<Scalar> ToDense(size_t out_size) const;
+
   Scalar operator*(const SparseVector &x) const;
+  Scalar operator*(const std::vector<Scalar> &x) const;
 
 private:
   std::vector<Index> index_;
   std::vector<Scalar> values_;
 };
+
+inline std::vector<Scalar> SparseVector::ToDense(size_t out_size) const {
+  std::vector<Scalar> res(out_size, 0.0);
+  for (Index i = 0; i < size(); ++i) {
+    assert(index_[i] < out_size);
+    res[index_[i]] = values_[i];
+  }
+  return res;
+}
 
 inline Scalar SparseVector::operator*(const SparseVector &x) const {
   Scalar res = 0.0;
@@ -83,6 +95,14 @@ inline Scalar SparseVector::operator*(const SparseVector &x) const {
   }
 
   return res;
+}
+
+inline Scalar SparseVector::operator*(const std::vector<Scalar> &x) const {
+  Scalar dot = 0.0;
+  for (Index k = 0; k < size(); ++k) {
+    dot += values_[k] * x[index_[k]];
+  }
+  return dot;
 }
 
 class SvIterator {
@@ -188,7 +208,7 @@ public:
   }
 
   void AssertIntegrity() const {
-#if DEBUG == 1
+#ifndef NDEBUG
     for (Index k = 0; k < this->Dimension(); k++) {
       const Index pk = this->Permute(k);
       assert(k == this->Inverse(pk));
@@ -261,13 +281,13 @@ public:
     this->clean_index_.resize(n, -1);
     this->clean_scalar_.resize(n, kNaN);
 
-#if DEBUG == 1
+#ifndef NDEBUG
     this->n = n;
 #endif
   }
 
   void AssertClean() const {
-#if DEBUG == 1
+#ifndef NDEBUG
     assert(this->dirty_index_.size() == 0);
     assert(this->dirty_scalar_.size() == 0);
     assert(this->dirty_index_.capacity() == this->n);
@@ -285,7 +305,7 @@ public:
 #endif
   }
 
-#if DEBUG == 1
+#ifndef NDEBUG
   Scalar n;
 #endif
 
@@ -427,7 +447,7 @@ inline void PruneZeros(SparseVector &v, Scalar tol) {
   PruneVector(v, [&](Index _, Scalar x) -> bool { return std::abs(x) < tol; });
 }
 
-// Solve the first n rows of L x' = x for sparse LU factorization
+// Solve the first n rows and cols of L x' = x for sparse LU factorization
 // lcols spans only first n rows of L
 // lrows spans at least the first n rows L
 //
@@ -436,6 +456,12 @@ inline void FactorizationFTranL(const std::vector<SparseVector> &lcols,
                                 const std::vector<SparseVector> &lrows,
                                 const Index n, SparseVector &x,
                                 SharedMemory &shared) {
+#ifndef NDEBUG
+  const SparseVector original_x = x;
+  const std::vector<Scalar> original_x_dense = original_x.ToDense(lrows.size());
+#endif
+  assert(n < lcols.size());
+
   shared.AssertClean();
   std::vector<Index> &memory_index = shared.clean_index_;
   std::vector<Index> &nodes_stack = shared.dirty_index_;
@@ -463,7 +489,7 @@ inline void FactorizationFTranL(const std::vector<SparseVector> &lcols,
     }
   }
 
-  SortSparse(x, lcols.size(), shared.dirty_index_, shared.dirty_scalar_);
+  SortSparse(x, lrows.size(), shared.dirty_index_, shared.dirty_scalar_);
 
   for (Index k = 0; k < x.size() && x.GetIndex()[k] < n; k++) {
     memory_index[x.GetIndex()[k]] = k;
@@ -491,6 +517,25 @@ inline void FactorizationFTranL(const std::vector<SparseVector> &lcols,
 
   PruneZeros(x, kEps);
   shared.AssertClean();
+
+  // check
+#ifndef NDEBUG
+  const std::vector<Scalar> result_x_dense = x.ToDense(lrows.size());
+
+  // first n rows
+  for (Index i = 0; i < n; i++) {
+    const Scalar err =
+        original_x_dense[i] - (lrows[i] * result_x_dense + result_x_dense[i]);
+    if (std::abs(err) > kEps) {
+      LOG_INFO("FTranL err i=%i, err=%f\n", i, err);
+    }
+  }
+
+  // the rest
+  for (Index i = n; i < lrows.size(); i++) {
+    assert(result_x_dense[i] == original_x_dense[i]);
+  }
+#endif
 }
 
 inline FactorizeResult
@@ -643,27 +688,19 @@ BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
   bool valid = true;
 
   for (Index j = 0; j < this->nvectors_; j++) {
-    std::vector<Scalar> dense_input(this->dimension_, 0.0);
-    for (SvIterator el(vectors[j]); el; ++el) {
-      dense_input[el.index()] = el.value();
-    }
+    const std::vector<Scalar> dense_input =
+        vectors[j].ToDense(this->dimension_);
 
     const Index pfov = this->row_permutation_.Permute(j);
-    std::vector<Scalar> dense_lower(this->dimension_, 0.0);
-    for (SvIterator el(this->lower_rows_[pfov]); el; ++el) {
-      // LOG_INFO("lrow(%i)[%i]=%f\n", pfov, el.index(), el.value());
-      dense_lower[el.index()] = el.value();
-    }
+    std::vector<Scalar> dense_lower =
+        this->lower_rows_[pfov].ToDense(this->dimension_);
     if (pfov < this->dimension_)
       dense_lower[pfov] = 1.0;
 
     for (Index i = 0; i < this->dimension_; i++) {
       const Index qinv = this->col_permutation_.Inverse(i);
-      std::vector<Scalar> dense_upper(this->dimension_, 0.0);
-      for (SvIterator el(this->upper_cols_[qinv]); el; ++el) {
-        // LOG_INFO("ucol(%i)[%i]=%f\n", qinv, el.index(), el.value());
-        dense_upper[el.index()] = el.value();
-      }
+      std::vector<Scalar> dense_upper =
+          this->upper_cols_[qinv].ToDense(this->dimension_);
       dense_upper[qinv] = this->upper_diagonal_[qinv];
 
       // lu_value = lrows(pfov(j)) * ucols(qinv(i))
