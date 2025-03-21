@@ -326,6 +326,28 @@ enum FactorizeResult {
   kSingular,
 };
 
+struct BasisChoiceStats {
+  Index l_nnz = 0;
+  Scalar l_sparse = 0.0;
+
+  Index l1_nnz = 0;
+  Scalar l1_sparse = 0.0;
+
+  Index u_nnz = 0;
+  Scalar u_sparse = 0.0;
+
+  Index total_nnz = 0;
+  Scalar total_sparse = 0.0;
+
+  void LogStats() const {
+    LOG_INFO("nnz(L) = %i (%f%%), nnz(L1) = %i (%f%%), nnz(U) = %i (%f%%), "
+             "nnz(F) = %i (%f%%)\n",
+             this->l_nnz, this->l_sparse * 100.0, this->l1_nnz,
+             this->l1_sparse * 100.0, this->u_nnz, this->u_sparse * 100.0,
+             this->total_nnz, this->total_sparse * 100.0);
+  }
+};
+
 class BasisChoice {
 public:
   BasisChoice(Index dimension, Index nvectors)
@@ -355,21 +377,16 @@ public:
     return r;
   }
 
-  // checking L U = P C^T Q
-  bool CheckFactorization(const std::vector<SparseVector> &vectors,
-                          Scalar tol = kEps) const;
-
   void ComputeQ(const std::vector<SparseVector> &ct_cols) {
-    this->col_permutation_.SetIdentity();
     // TODO: implement COLAMD
-    // std::sort(this->col_permutation_.GetPermutation().begin(),
-    //           this->col_permutation_.GetPermutation().end(),
-    //           [&](const Index &lhs, const Index &rhs) -> bool {
-    //             return ct_cols[lhs].size() <= ct_cols[rhs].size();
-    //           });
-    //
-    // this->col_permutation_.RestoreInverse();
-    // this->col_permutation_.AssertIntegrity();
+    this->col_permutation_.SetIdentity();
+    std::sort(this->col_permutation_.GetPermutation().begin(),
+              this->col_permutation_.GetPermutation().end(),
+              [&](const Index &lhs, const Index &rhs) -> bool {
+                return ct_cols[lhs].size() <= ct_cols[rhs].size();
+              });
+    this->col_permutation_.RestoreInverse();
+    this->col_permutation_.AssertIntegrity();
   }
 
   FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_cols,
@@ -406,6 +423,11 @@ public:
     // L_1^T x' = x
     assert(false);
   }
+
+  // checking L U = P C^T Q
+  bool CheckFactorization(const std::vector<SparseVector> &vectors,
+                          Scalar tol = kEps) const;
+  BasisChoiceStats ComputeStats() const;
 
 public:
   // L U = P C^T Q
@@ -726,6 +748,39 @@ BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
   }
 
   return valid;
+}
+
+inline BasisChoiceStats BasisChoice::ComputeStats() const {
+  BasisChoiceStats stats;
+
+  const Index u_spaces = this->dimension_ * (this->dimension_ - 1) / 2;
+
+  // U is from ucols
+  for (Index i = 0; i < this->dimension_; i++) {
+    // stats.u_nnz += i;
+    stats.u_nnz += this->upper_cols_[i].size();
+  }
+  stats.u_sparse = Scalar(stats.u_nnz) / u_spaces;
+
+  // L is from lrows
+  for (Index i = 0; i < this->nvectors_; i++) {
+    // stats.l_nnz += std::min(i, this->dimension_);
+    stats.l_nnz += this->lower_rows_[i].size();
+  }
+  stats.l_sparse = Scalar(stats.l_nnz) / (this->nvectors_ * this->dimension_ -
+                                          u_spaces - this->dimension_);
+
+  // L1 is from lcols
+  for (Index i = 0; i < this->dimension_; i++) {
+    stats.l1_nnz += this->lower_cols_[i].size();
+  }
+  stats.l1_sparse = Scalar(stats.l1_nnz) / u_spaces;
+
+  stats.total_nnz = stats.u_nnz + stats.l_nnz + this->dimension_;
+  stats.total_sparse =
+      Scalar(stats.total_nnz) / (this->nvectors_ * this->dimension_);
+
+  return stats;
 }
 
 } // namespace basis_choice

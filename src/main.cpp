@@ -42,6 +42,7 @@ void TestCols(const MtxData &cols) {
   choice.Factorize(cols.cols, priority);
   const bool v = choice.CheckFactorization(cols.cols);
   LOG_INFO("v=%i\n", v);
+  choice.ComputeStats().LogStats();
 }
 
 const char *test_files[] = {
