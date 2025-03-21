@@ -36,11 +36,21 @@ MtxData ReadColumns(const char *filename) {
   return MtxData{nrows, ncols, nnz, cols};
 }
 
-void TestCols(const MtxData &cols) {}
+void TestCols(const MtxData &cols) {
+  basis_choice::BasisChoice choice(cols.nrows, cols.ncols);
+  const std::vector<Scalar> priority;
+  choice.Factorize(cols.cols, priority);
+  const bool v = choice.CheckFactorization(cols.cols);
+  LOG_INFO("v=%i\n", v);
+}
 
-const char *test_files[] = {"./test_data/PRIMAL1.mtx",
-                            "./test_data/PRIMAL2.mtx", "./test_data/UBH1.mtx",
-                            "./test_data/BOYD1.mtx"};
+const char *test_files[] = {
+    "./test_data/sanity1.mtx", "./test_data/sanity2.mtx",
+    "./test_data/sanity3.mtx",
+    // "./test_data/PRIMAL1.mtx"
+    //     , "./test_data/PRIMAL2.mtx",
+    // "./test_data/UBH1.mtx",    "./test_data/BOYD1.mtx"
+};
 
 int main(int argc, const char *argv[]) {
   for (const char *filename : test_files) {

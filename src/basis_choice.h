@@ -3,21 +3,22 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
 #define LOG_INFO(fmt, args...) fprintf(stdout, fmt, ##args)
 
 using Scalar = double;
 using Index = int32_t;
+constexpr Scalar kNaN = std::numeric_limits<Scalar>::quiet_NaN();
 
 class SparseVector {
 public:
-  SparseVector(Index n) : index_(n), values_(n) {}
-
-  SparseVector() {}
+  SparseVector() : index_(), values_() {}
 
   std::vector<Index> &GetIndex() { return this->index_; }
   const std::vector<Index> &GetIndex() const { return this->index_; }
@@ -49,10 +50,40 @@ public:
     values_.reserve(n);
   }
 
+  void Erase(size_t n) {
+    index_.erase(index_.begin() + n);
+    values_.erase(values_.begin() + n);
+  }
+
+  Scalar operator*(const SparseVector &x) const;
+
 private:
   std::vector<Index> index_;
   std::vector<Scalar> values_;
 };
+
+inline Scalar SparseVector::operator*(const SparseVector &x) const {
+  Scalar res = 0.0;
+
+  Index i_le = 0, i_ri = 0;
+  while (i_le < this->size() and i_ri < x.size()) {
+    auto pos_le = this->index_[i_le];
+    auto pos_ri = x.index_[i_ri];
+    if (pos_le < pos_ri) {
+      i_le++;
+      continue;
+    } else if (pos_le > pos_ri) {
+      i_ri++;
+      continue;
+    } else {
+      res += this->values_[i_le] * x.values_[i_ri];
+      i_le++;
+      i_ri++;
+    }
+  }
+
+  return res;
+}
 
 class SvIterator {
   // for (SvIterator el(vector); el; ++el) { ... }
@@ -187,6 +218,7 @@ inline void PermuteDense(std::vector<Scalar> &v, std::vector<Scalar> &swap,
 inline void SortSparse(SparseVector &v, Index dimension,
                        std::vector<Index> &index_swap,
                        std::vector<Scalar> &scalar_swap) {
+  assert(index_swap.size() == 0);
   scalar_swap.resize(dimension);
 
   for (SvIterator el(v); el; ++el) {
@@ -227,11 +259,40 @@ public:
     this->dirty_index_.reserve(n);
     this->dirty_scalar_.reserve(n);
     this->clean_index_.resize(n, -1);
+    this->clean_scalar_.resize(n, kNaN);
+
+#if DEBUG == 1
+    this->n = n;
+#endif
   }
+
+  void AssertClean() const {
+#if DEBUG == 1
+    assert(this->dirty_index_.size() == 0);
+    assert(this->dirty_scalar_.size() == 0);
+    assert(this->dirty_index_.capacity() == this->n);
+    assert(this->dirty_scalar_.capacity() == this->n);
+
+    assert(this->clean_index_.size() == this->n);
+    for (Index k = 0; k < this->n; k++) {
+      assert(this->clean_index_[k] == -1);
+    }
+
+    assert(this->clean_scalar_.size() == this->n);
+    for (Index k = 0; k < this->n; k++) {
+      assert(std::isnan(this->clean_scalar_[k]));
+    }
+#endif
+  }
+
+#if DEBUG == 1
+  Scalar n;
+#endif
 
   std::vector<Scalar> dirty_scalar_;
   std::vector<Index> dirty_index_;
-  std::vector<Index> clean_index_; // value = -1
+  std::vector<Scalar> clean_scalar_; // value = kNan
+  std::vector<Index> clean_index_;   // value = -1
 };
 
 enum FactorizeResult {
@@ -242,10 +303,10 @@ enum FactorizeResult {
 class BasisChoice {
 public:
   BasisChoice(Index dimension, Index nvectors)
-      : row_permutation_(nvectors), col_permutation_(dimension),
-        lower_triangular_rows_(nvectors), lower_triangular_cols_(dimension),
-        upper_triangular_rows_(dimension), upper_triangular_cols_(dimension),
-        upper_diagonal_(dimension), shared_(dimension, nvectors) {}
+      : dimension_(dimension), nvectors_(nvectors), row_permutation_(nvectors),
+        col_permutation_(dimension), lower_rows_(nvectors),
+        lower_cols_(dimension), upper_rows_(dimension), upper_cols_(dimension),
+        upper_diagonal_(dimension, 0.0), shared_(dimension, nvectors) {}
 
   // factorize in terms of input vectors
   // priority is defined for each col (smaller value = higher priority)
@@ -268,22 +329,27 @@ public:
     return r;
   }
 
-  void ComputeQ(const std::vector<SparseVector> &ct_cols) {
-    // TODO: implement COLAMD
-    std::sort(this->col_permutation_.GetPermutation().begin(),
-              this->col_permutation_.GetPermutation().end(),
-              [&](const Index &lhs, const Index &rhs) -> bool {
-                return ct_cols[lhs].size() <= ct_cols[rhs].size();
-              });
+  // checking L U = P C^T Q
+  bool CheckFactorization(const std::vector<SparseVector> &vectors,
+                          Scalar tol = kEps) const;
 
-    this->col_permutation_.RestoreInverse();
-    this->col_permutation_.AssertIntegrity();
+  void ComputeQ(const std::vector<SparseVector> &ct_cols) {
+    this->col_permutation_.SetIdentity();
+    // TODO: implement COLAMD
+    // std::sort(this->col_permutation_.GetPermutation().begin(),
+    //           this->col_permutation_.GetPermutation().end(),
+    //           [&](const Index &lhs, const Index &rhs) -> bool {
+    //             return ct_cols[lhs].size() <= ct_cols[rhs].size();
+    //           });
+    //
+    // this->col_permutation_.RestoreInverse();
+    // this->col_permutation_.AssertIntegrity();
   }
 
   FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_cols,
                             const std::vector<Scalar> &priority);
 
-  // solve Cx'=x
+  // solve C x' = x
   void SolveInPlace(std::vector<Scalar> &x) const {
     // C' x' = x
     this->SolveBasisInPlace(x);
@@ -315,10 +381,11 @@ public:
     assert(false);
   }
 
-private:
-  // LU = PC^TQ
+public:
+  // L U = P C^T Q
   // L = (L_1^T L_2^T)^T
   // C' = Q U^T L_1^T
+  // L_1 diagonal is unit
 
   // dimensions
   Index dimension_; // ncols
@@ -328,11 +395,11 @@ private:
   Permutation row_permutation_; // P
   Permutation col_permutation_; // Q
 
-  // L_1, U factors
-  std::vector<SparseVector> lower_triangular_rows_;
-  std::vector<SparseVector> lower_triangular_cols_;
-  std::vector<SparseVector> upper_triangular_rows_;
-  std::vector<SparseVector> upper_triangular_cols_;
+  // L, U factors
+  std::vector<SparseVector> lower_rows_;
+  std::vector<SparseVector> lower_cols_;
+  std::vector<SparseVector> upper_rows_;
+  std::vector<SparseVector> upper_cols_;
   std::vector<Scalar> upper_diagonal_;
 
   // shared memory for solves
@@ -356,125 +423,183 @@ template <class F> inline void PruneVector(SparseVector &v, F condition) {
   v.Resize(l);
 }
 
-// Solve L x' = x in LU only for the first n cols
-// lcols is assumed to span only first n rows and all the cols
-// lrows is assumed to span the whole matrix
+inline void PruneZeros(SparseVector &v, Scalar tol) {
+  PruneVector(v, [&](Index _, Scalar x) -> bool { return std::abs(x) < tol; });
+}
+
+// Solve the first n rows of L x' = x for sparse LU factorization
+// lcols spans only first n rows of L
+// lrows spans at least the first n rows L
+//
+// Works only with the first n elements of x
 inline void FactorizationFTranL(const std::vector<SparseVector> &lcols,
                                 const std::vector<SparseVector> &lrows,
                                 const Index n, SparseVector &x,
                                 SharedMemory &shared) {
+  shared.AssertClean();
   std::vector<Index> &memory_index = shared.clean_index_;
+  std::vector<Index> &nodes_stack = shared.dirty_index_;
 
   // fill-in computation
-  for (Index k = 0; k < x.size(); k++) {
+  for (Index k = 0; k < x.size() && x.GetIndex()[k] < n; k++) {
     memory_index[x.GetIndex()[k]] = k;
+    nodes_stack.push_back(x.GetIndex()[k]);
   }
 
-  Index k = 0;
-  while (k < x.size()) {
-    const Index j = x.GetIndex()[k];
+  while (!nodes_stack.empty()) {
+    const Index j = nodes_stack.back();
+    nodes_stack.pop_back();
 
     for (SvIterator el(lcols[j]); el; ++el) {
       const Index i = el.index();
+      assert(i < n);
+      assert(i > j);
 
       if (memory_index[i] != -1) {
-        memory_index[el.index()] = x.size();
-        x.PushBack(el.index(), 0.0);
+        memory_index[i] = x.size();
+        x.PushBack(i, 0.0);
+        nodes_stack.push_back(i);
       }
     }
-
-    k++;
   }
 
   SortSparse(x, lcols.size(), shared.dirty_index_, shared.dirty_scalar_);
 
-  for (Index k = 0; k < x.size(); k++) {
+  for (Index k = 0; k < x.size() && x.GetIndex()[k] < n; k++) {
     memory_index[x.GetIndex()[k]] = k;
   }
 
   // compute the values
-  for (Index k = 0; k < x.size(); k++) {
+  for (Index k = 0; k < x.size() && x.GetIndex()[k] < n; k++) {
     const Index i = x.GetIndex()[k];
     Scalar &xi = x.GetValues()[k];
 
     for (SvIterator el(lrows[i]); el; ++el) {
-      xi -= el.value() * x.GetValues()[memory_index[el.index()]];
+      assert(el.index() < i);
+      assert(memory_index[el.index()] < k);
+
+      if (memory_index[el.index()] != -1) {
+        xi -= el.value() * x.GetValues()[memory_index[el.index()]];
+      }
     }
   }
 
   // clean up
-  for (Index k = 0; k < x.size(); k++) {
+  for (Index k = 0; k < x.size() && x.GetIndex()[k] < n; k++) {
     memory_index[x.GetIndex()[k]] = -1;
   }
 
-  PruneVector(x, [&](Index _, Scalar v) -> bool { return std::abs(v) < kEps; });
+  PruneZeros(x, kEps);
+  shared.AssertClean();
 }
 
 inline FactorizeResult
 BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
                        const std::vector<Scalar> &priority) {
   // --- this function assumes ---
-  // row_permutation_ is empty (all zeros, not a correct permutation)
+  // row_permutation_ is any
   // cols_permutation_ contains the final permutation
-  // lower_triangular_rows_ is final size with empty elements
-  // lower_triangular_cols_ is final size with empty elements
-  // upper_triangular_rows_ is final size with empty elements
-  // upper_triangular_cols_ is final size with empty elements
-  // upper_diagonal_ is final size with undefined elements
+  // lower_rows_ is final size with empty elements
+  // lower_cols_ is final size with empty elements
+  // upper_rows_ is final size with empty elements
+  // upper_cols_ is final size with empty elements
+  // upper_diagonal_ is final size with zeros
   // -----------------------------
 
   this->row_permutation_.SetIdentity();
 
-  for (Index j = 0; j < dimension_; j++) {
-    SparseVector &upper_col = this->upper_triangular_cols_[j];
+  for (Index j = 0; j < this->dimension_; j++) {
+    // get the next column, permute it and apply gaussian steps
+
+    SparseVector &upper_col = this->upper_cols_[j];
     upper_col = ct_cols[this->col_permutation_.Permute(j)];
+
+    LOG_INFO("Incoming: ");
+    for (SvIterator el(upper_col); el; ++el) {
+      LOG_INFO("(%i, %f) ", el.index(), el.value());
+    }
+    LOG_INFO("\n");
 
     PermuteSparse(upper_col, this->row_permutation_.GetPermutation(),
                   this->shared_.dirty_index_, this->shared_.dirty_scalar_);
 
-    FactorizationFTranL(this->lower_triangular_cols_,
-                        this->lower_triangular_rows_, j, upper_col,
+    FactorizationFTranL(this->lower_cols_, this->lower_rows_, j, upper_col,
                         this->shared_);
 
-    // split off the upper factor
+    LOG_INFO("Incoming: ");
+    for (SvIterator el(upper_col); el; ++el) {
+      LOG_INFO("(%i, %f) ", el.index(), el.value());
+    }
+    LOG_INFO("\n");
 
-    SparseVector &lower_col = this->lower_triangular_cols_[j];
-    lower_col.Reserve(upper_col.size());
+    // split upper and lower factors
 
-    Index k = 0;
-    while (upper_col.GetIndex()[k] < j) {
-      assert(k < upper_col.size());
-      k++;
+    SparseVector b_vector;
+    b_vector.Reserve(upper_col.size());
+
+    Index upper_size = 0;
+    while (upper_size < upper_col.size() &&
+           upper_col.GetIndex()[upper_size] < j) {
+      upper_size++;
     }
 
-    for (; k < upper_col.size(); k++) {
-      lower_col.PushBack(upper_col.GetIndex()[k], upper_col.GetValues()[k]);
+    for (Index k = upper_size; k < upper_col.size(); k++) {
+      b_vector.PushBack(upper_col.GetIndex()[k], upper_col.GetValues()[k]);
     }
+
+    upper_col.Resize(upper_size);
+
+    // compute the b_vector
+
+    // TODO: do a symbolic phase
+    Index mem_idx = 0;
+    for (Index i = j; i < this->nvectors_; i++) {
+      const Scalar product = this->lower_rows_[i] * upper_col;
+
+      if (mem_idx < b_vector.size() && b_vector.GetIndex()[mem_idx] == i) {
+        b_vector.GetValues()[mem_idx] -= product;
+        mem_idx++;
+      } else {
+        b_vector.PushBack(i, -product);
+      }
+    }
+
+    SortSparse(b_vector, this->nvectors_, this->shared_.dirty_index_,
+               this->shared_.dirty_scalar_);
+    PruneZeros(b_vector, kEps);
 
     // pivot choice
 
-    Index mem_pivot = 0;
-    Index pivot = lower_col.GetIndex()[0];
+    if (b_vector.size() == 0) {
+      return FactorizeResult::kSingular;
+    }
 
-    if (lower_col.size() == 1) {
+    // TODO: do actual pivot choice
+    Index mem_pivot = 0;
+    if (b_vector.size() == 1) {
       mem_pivot = 0;
     } else {
       mem_pivot = 1;
     }
+    const Index pivot = b_vector.GetIndex()[mem_pivot];
+    assert(pivot >= j);
 
-    pivot = lower_col.GetIndex()[mem_pivot];
+    LOG_INFO("Swap %i and %i\n", j, pivot);
 
-    // setting diagonal, lower factors and permutation
+    // split off upper diagonal
 
-    this->upper_diagonal_[j] = lower_col.GetValues()[mem_pivot];
+    this->upper_diagonal_[j] = b_vector.GetValues()[mem_pivot];
+    LOG_INFO("ujj = %f\n", this->upper_diagonal_[j]);
 
-    if (lower_col.GetIndex()[0] == j) {
-      std::swap(lower_col.GetValues()[0], lower_col.GetValues()[mem_pivot]);
-      lower_col.GetValues().erase(lower_col.GetValues().begin());
-      lower_col.GetIndex().erase(lower_col.GetIndex().begin());
+    if (b_vector.GetIndex()[0] == j) {
+      std::swap(b_vector.GetValues()[0], b_vector.GetValues()[mem_pivot]);
+      b_vector.Erase(0);
     } else {
-      assert(false);
+      assert(b_vector.GetIndex()[0] > j);
+      b_vector.Erase(mem_pivot);
     }
+
+    // update the row permutation
 
     const Index inverse_pivot = this->row_permutation_.Inverse(pivot);
     const Index inverse_j = this->row_permutation_.Inverse(j);
@@ -482,9 +607,83 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     this->row_permutation_.GetPermutation()[inverse_j] = pivot;
     this->row_permutation_.GetInverse()[j] = inverse_pivot;
     this->row_permutation_.GetInverse()[pivot] = inverse_j;
+    this->row_permutation_.AssertIntegrity();
+
+    // permute lower rows
+    std::swap(this->lower_rows_[j], this->lower_rows_[pivot]);
+
+    // add a new row to lower cols
+    for (SvIterator el(this->lower_rows_[j]); el; ++el) {
+      assert(el.index() < j);
+      this->lower_cols_[el.index()].PushBack(j, el.value());
+    }
+
+    // add a new col to lower rows
+    for (SvIterator el(b_vector); el; ++el) {
+      assert(el.index() > j);
+      this->lower_rows_[el.index()].PushBack(j, el.value() /
+                                                    this->upper_diagonal_[j]);
+    }
+  }
+
+  // compute upper rows
+  for (Index j = 0; j < this->dimension_; j++) {
+    for (SvIterator el(this->upper_cols_[j]); el; ++el) {
+      assert(el.index() < this->dimension_);
+      this->upper_rows_[el.index()].PushBack(j, el.value());
+    }
   }
 
   return FactorizeResult::kOk;
+}
+
+inline bool
+BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
+                                Scalar tol) const {
+  bool valid = true;
+
+  for (Index j = 0; j < this->nvectors_; j++) {
+    std::vector<Scalar> dense_input(this->dimension_, 0.0);
+    for (SvIterator el(vectors[j]); el; ++el) {
+      dense_input[el.index()] = el.value();
+    }
+
+    const Index pfov = this->row_permutation_.Permute(j);
+    std::vector<Scalar> dense_lower(this->dimension_, 0.0);
+    for (SvIterator el(this->lower_rows_[pfov]); el; ++el) {
+      // LOG_INFO("lrow(%i)[%i]=%f\n", pfov, el.index(), el.value());
+      dense_lower[el.index()] = el.value();
+    }
+    if (pfov < this->dimension_)
+      dense_lower[pfov] = 1.0;
+
+    for (Index i = 0; i < this->dimension_; i++) {
+      const Index qinv = this->col_permutation_.Inverse(i);
+      std::vector<Scalar> dense_upper(this->dimension_, 0.0);
+      for (SvIterator el(this->upper_cols_[qinv]); el; ++el) {
+        // LOG_INFO("ucol(%i)[%i]=%f\n", qinv, el.index(), el.value());
+        dense_upper[el.index()] = el.value();
+      }
+      dense_upper[qinv] = this->upper_diagonal_[qinv];
+
+      // lu_value = lrows(pfov(j)) * ucols(qinv(i))
+
+      Scalar lu_value = 0.0;
+      for (Index k = 0; k < this->dimension_; k++) {
+        lu_value += dense_lower[k] * dense_upper[k];
+      }
+
+      const Scalar c_value = dense_input[i];
+
+      if (std::abs(lu_value - c_value) > tol) {
+        LOG_INFO("i=%4i, j=%4i, lu=%.4e, c=%.4e, err=%.4e\n", i, j, lu_value,
+                 c_value, c_value - lu_value);
+        valid = false;
+      }
+    }
+  }
+
+  return valid;
 }
 
 } // namespace basis_choice
