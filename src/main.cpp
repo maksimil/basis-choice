@@ -46,10 +46,11 @@ void TestCols(const MtxData &cols) {
 
 const char *test_files[] = {
     "./test_data/sanity1.mtx", "./test_data/sanity2.mtx",
-    "./test_data/sanity3.mtx",
-    // "./test_data/PRIMAL1.mtx"
-    //     , "./test_data/PRIMAL2.mtx",
-    // "./test_data/UBH1.mtx",    "./test_data/BOYD1.mtx"
+    "./test_data/sanity3.mtx", "./test_data/PRIMAL1.mtx",
+    "./test_data/PRIMAL2.mtx", "./test_data/PRIMAL3.mtx",
+    "./test_data/PRIMAL4.mtx",
+    // "./test_data/UBH1.mtx",
+    // "./test_data/BOYD1.mtx"
 };
 
 int main(int argc, const char *argv[]) {

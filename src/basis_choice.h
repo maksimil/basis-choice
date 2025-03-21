@@ -563,11 +563,11 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     SparseVector &upper_col = this->upper_cols_[j];
     upper_col = ct_cols[this->col_permutation_.Permute(j)];
 
-    LOG_INFO("Incoming: ");
-    for (SvIterator el(upper_col); el; ++el) {
-      LOG_INFO("(%i, %f) ", el.index(), el.value());
-    }
-    LOG_INFO("\n");
+    // LOG_INFO("Incoming: ");
+    // for (SvIterator el(upper_col); el; ++el) {
+    //   LOG_INFO("(%i, %f) ", el.index(), el.value());
+    // }
+    // LOG_INFO("\n");
 
     PermuteSparse(upper_col, this->row_permutation_.GetPermutation(),
                   this->shared_.dirty_index_, this->shared_.dirty_scalar_);
@@ -575,11 +575,11 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     FactorizationFTranL(this->lower_cols_, this->lower_rows_, j, upper_col,
                         this->shared_);
 
-    LOG_INFO("Incoming: ");
-    for (SvIterator el(upper_col); el; ++el) {
-      LOG_INFO("(%i, %f) ", el.index(), el.value());
-    }
-    LOG_INFO("\n");
+    // LOG_INFO("Incoming: ");
+    // for (SvIterator el(upper_col); el; ++el) {
+    //   LOG_INFO("(%i, %f) ", el.index(), el.value());
+    // }
+    // LOG_INFO("\n");
 
     // split upper and lower factors
 
@@ -623,22 +623,23 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
       return FactorizeResult::kSingular;
     }
 
-    // TODO: do actual pivot choice
+    // TODO: do priority pivot choice
     Index mem_pivot = 0;
-    if (b_vector.size() == 1) {
-      mem_pivot = 0;
-    } else {
-      mem_pivot = 1;
+    for (Index k = 0; k < b_vector.size(); k++) {
+      if (std::abs(b_vector.GetValues()[mem_pivot]) <
+          std::abs(b_vector.GetValues()[k])) {
+        mem_pivot = k;
+      }
     }
     const Index pivot = b_vector.GetIndex()[mem_pivot];
     assert(pivot >= j);
 
-    LOG_INFO("Swap %i and %i\n", j, pivot);
+    // LOG_INFO("Swap %i and %i\n", j, pivot);
 
     // split off upper diagonal
 
     this->upper_diagonal_[j] = b_vector.GetValues()[mem_pivot];
-    LOG_INFO("ujj = %f\n", this->upper_diagonal_[j]);
+    // LOG_INFO("ujj = %f\n", this->upper_diagonal_[j]);
 
     if (b_vector.GetIndex()[0] == j) {
       std::swap(b_vector.GetValues()[0], b_vector.GetValues()[mem_pivot]);
