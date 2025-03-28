@@ -11,7 +11,7 @@
 #include <limits>
 #include <vector>
 
-#define LOG_INFO(fmt, args...) fprintf(stdout, fmt, ##args)
+#define LOG_INFO(...) fprintf(stdout, __VA_ARGS__)
 
 class Timer {
 public:
@@ -161,7 +161,7 @@ inline std::vector<SparseVector>
 ComputeRowRepresentation(const std::vector<SparseVector> &cols, Index nrows) {
   std::vector<SparseVector> rows(nrows);
 
-  for (Index ic = 0; ic < cols.size(); ic++) {
+  for (Index ic = 0; ic < Index(cols.size()); ic++) {
     for (SvIterator el(cols[ic]); el; ++el) {
       rows[el.index()].PushBack(ic, el.value());
     }
@@ -271,7 +271,7 @@ inline void SortSparse(SparseVector &v, Index dimension,
   std::sort(index_swap.begin(), index_swap.end());
   v.Clear();
 
-  for (Index i = 0; i < index_swap.size(); i++) {
+  for (Index i = 0; i < Index(index_swap.size()); i++) {
     v.PushBack(index_swap[i], scalar_swap[index_swap[i]]);
   }
 
@@ -497,7 +497,7 @@ template <class F> inline void PruneVector(SparseVector &v, F condition) {
 }
 
 inline void PruneZeros(SparseVector &v, Scalar tol) {
-  PruneVector(v, [&](Index _, Scalar x) -> bool { return std::abs(x) < tol; });
+  PruneVector(v, [&](Index, Scalar x) -> bool { return std::abs(x) < tol; });
 }
 
 // set v[j], v[p] <- 0, v[j]
@@ -505,7 +505,7 @@ inline void PruneZeros(SparseVector &v, Scalar tol) {
 // v.index[0] >= j
 inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
                               const SparseVector &jrow,
-                              const SparseVector &prow, Index j, Index p) {
+                              const SparseVector &prow, Index p) {
   Index jmem = 0;
   Index pmem = 0;
 
@@ -513,11 +513,14 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
     const Index jidx = jrow.GetIndex()[jmem];
     const Index pidx = prow.GetIndex()[pmem];
 
+    const Index midx = std::min(jidx, pidx);
+
+    SparseVector &tailcol = tail[midx];
+    const Index mem_p = std::lower_bound(tailcol.GetIndex().begin(),
+                                         tailcol.GetIndex().end(), p) -
+                        tailcol.GetIndex().begin();
+
     if (jidx == pidx) {
-      SparseVector &tailcol = tail[jidx];
-      const Index mem_p = std::lower_bound(tailcol.GetIndex().begin(),
-                                           tailcol.GetIndex().end(), p) -
-                          tailcol.GetIndex().begin();
       assert(mem_p < tailcol.size());
       assert(tailcol.GetIndex()[mem_p] == p);
       std::swap(tailcol.GetValues()[0], tailcol.GetValues()[mem_p]);
@@ -525,11 +528,6 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
       jmem++;
       pmem++;
     } else if (jidx < pidx) {
-      SparseVector &tailcol = tail[jidx];
-      const Index mem_p = std::lower_bound(tailcol.GetIndex().begin(),
-                                           tailcol.GetIndex().end(), p) -
-                          tailcol.GetIndex().begin();
-
       const Scalar value = tailcol.GetValues()[0];
 
       for (Index k = 0; k < mem_p - 1; k++) {
@@ -542,10 +540,6 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
       jmem++;
     } else {
       assert(pidx < jidx);
-      SparseVector &tailcol = tail[pidx];
-      const Index mem_p = std::lower_bound(tailcol.GetIndex().begin(),
-                                           tailcol.GetIndex().end(), p) -
-                          tailcol.GetIndex().begin();
       tailcol.Erase(mem_p);
       pmem++;
     }
@@ -589,8 +583,7 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
 inline void LUBVectorCompute(SparseVector &b_vector,
                              const std::vector<SparseVector> &lrows,
                              const std::vector<SparseVector> &lcols_tail,
-                             const SparseVector &ucol, const Index j,
-                             SharedMemory &shared) {
+                             const SparseVector &ucol, SharedMemory &shared) {
   shared.AssertClean();
 
   std::vector<Index> &memory_index = shared.clean_index_;
@@ -600,13 +593,13 @@ inline void LUBVectorCompute(SparseVector &b_vector,
   }
 
   for (SvIterator u_el(ucol); u_el; ++u_el) {
-    assert(u_el.index() < j);
+    // assert(u_el.index() < j);
 
     for (SvIterator l_el(lcols_tail[u_el.index()]); l_el; ++l_el) {
       const Index i = l_el.index();
       const Scalar v = u_el.value() * l_el.value();
 
-      assert(i >= j);
+      // assert(i >= j);
 
       if (memory_index[i] == -1) {
         memory_index[i] = b_vector.size();
@@ -716,7 +709,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
 
 inline FactorizeResult
 BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
-                       const std::vector<Scalar> &priority) {
+                       const std::vector<Scalar> &) {
   // --- this function assumes ---
   // row_permutation_ is any
   // cols_permutation_ contains the final permutation
@@ -772,7 +765,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // compute the b_vector
 
-    LUBVectorCompute(b_vector, this->lrows_, this->lcols_tail_, upper_col, j,
+    LUBVectorCompute(b_vector, this->lrows_, this->lcols_tail_, upper_col,
                      this->shared_);
 
     // pivot choice
@@ -819,7 +812,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // permute tail
     LUTailSwapRemoves(this->lcols_tail_, this->lrows_[j], this->lrows_[pivot],
-                      j, pivot);
+                      pivot);
 
     // permute lower rows
     std::swap(this->lrows_[j], this->lrows_[pivot]);

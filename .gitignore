@@ -21,3 +21,6 @@ basis-choice
 # test_data
 test_data/*.mtx
 !test_data/sanity*
+
+# flamegraphs
+flamegraphs

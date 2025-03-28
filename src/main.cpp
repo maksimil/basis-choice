@@ -63,12 +63,12 @@ const char *test_files[] = {
     "./test_data/UBH1.mtx",
 };
 
-int main(int argc, const char *argv[]) {
+int main(int, const char *[]) {
   for (const char *filename : test_files) {
     MtxData data = ReadColumns(filename);
     Scalar sparsity = Scalar(data.nnz) / (data.nrows * data.ncols);
 
-    LOG_INFO("\n\e[32mTesting %s\e[m\n", filename);
+    LOG_INFO("\n\x1B[32mTesting %s\x1B[m\n", filename);
     LOG_INFO("nrows=%6d, ncols=%6d, nnz=%8d (%f%%)\n", data.nrows, data.ncols,
              data.nnz, sparsity * 100.0);
 
