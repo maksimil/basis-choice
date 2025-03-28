@@ -728,30 +728,17 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
   this->row_permutation_.SetIdentity();
 
   for (Index j = 0; j < this->dimension_; j++) {
-    // get the next column, permute it and apply gaussian steps
+    // --- get the next column ---
 
     SparseVector &upper_col = this->ucols_[j];
     upper_col = ct_cols[this->col_permutation_.Permute(j)];
-
-    // LOG_INFO("Incoming: ");
-    // for (SvIterator el(upper_col); el; ++el) {
-    //   LOG_INFO("(%i, %f) ", el.index(), el.value());
-    // }
-    // LOG_INFO("\n");
 
     PermuteSparse(upper_col, this->row_permutation_.GetPermutation(),
                   this->shared_.dirty_index_, this->shared_.dirty_scalar_);
 
     LUFTranL(this->lcols_head_, this->lrows_, j, upper_col, this->shared_);
 
-    // LOG_INFO("Incoming: ");
-    // for (SvIterator el(upper_col); el; ++el) {
-    //   LOG_INFO("(%i, %f) ", el.index(), el.value());
-    // }
-    // LOG_INFO("\n");
-
-    // split upper and lower factors
-
+    // --- split off the upper part ---
     SparseVector b_vector;
     b_vector.Reserve(upper_col.size());
 
@@ -767,17 +754,16 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     upper_col.Resize(upper_size);
 
-    // compute the b_vector
+    // --- compute the b_vector ---
 
     LUBVectorCompute(b_vector, this->lcols_tail_, upper_col, this->shared_);
-
-    // pivot choice
 
     if (b_vector.size() == 0) {
       return FactorizeResult::kSingular;
     }
 
-    // TODO: do priority pivot choice
+    // --- pivot choice ---
+
     Index mem_pivot = 0;
     for (Index k = 0; k < b_vector.size(); k++) {
       if (std::abs(b_vector.GetValues()[mem_pivot]) <
@@ -788,12 +774,9 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     const Index pivot = b_vector.GetIndex()[mem_pivot];
     assert(pivot >= j);
 
-    // LOG_INFO("Swap %i and %i\n", j, pivot);
-
-    // split off upper diagonal
+    // --- split off the upper diagonal ---
 
     this->udiagonal_[j] = b_vector.GetValues()[mem_pivot];
-    // LOG_INFO("ujj = %f\n", this->upper_diagonal_[j]);
 
     if (b_vector.GetIndex()[0] == j) {
       std::swap(b_vector.GetValues()[0], b_vector.GetValues()[mem_pivot]);
@@ -803,7 +786,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
       b_vector.Erase(mem_pivot);
     }
 
-    // update the row permutation
+    // --- update the row permutation ---
 
     const Index inverse_pivot = this->row_permutation_.Inverse(pivot);
     const Index inverse_j = this->row_permutation_.Inverse(j);
@@ -813,14 +796,16 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     this->row_permutation_.GetInverse()[pivot] = inverse_j;
     this->row_permutation_.AssertIntegrity();
 
-    // permute tail
+    // --- update lower matrix ---
+
+    // permute tail and remove pivot row
     LUTailSwapRemoves(this->lcols_tail_, this->lrows_[j], this->lrows_[pivot],
                       pivot);
 
     // permute lower rows
     std::swap(this->lrows_[j], this->lrows_[pivot]);
 
-    // add a new row to lower cols
+    // add the pivot row row to lower cols
     for (SvIterator el(this->lrows_[j]); el; ++el) {
       assert(el.index() < j);
       this->lcols_head_[el.index()].PushBack(j, el.value());
