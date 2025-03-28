@@ -157,6 +157,9 @@ namespace basis_choice {
 // cutoff absolute value during factorization
 constexpr Scalar kEps = 1e-12;
 
+// tol for pivot choice
+constexpr Scalar kPivotTol = 1e-3;
+
 inline std::vector<SparseVector>
 ComputeRowRepresentation(const std::vector<SparseVector> &cols, Index nrows) {
   std::vector<SparseVector> rows(nrows);
@@ -419,6 +422,14 @@ public:
   FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_cols,
                             const std::vector<Scalar> &priority);
 
+  std::vector<Index> GetBasisVectors() const {
+    std::vector<Index> idxs(this->dimension_);
+    for (Index i = 0; i < this->dimension_; i++) {
+      idxs[i] = this->row_permutation_.Inverse(i);
+    }
+    return idxs;
+  }
+
   // solve C x' = x
   void SolveInPlace(std::vector<Scalar> &x) const {
     // C' x' = x
@@ -442,7 +453,7 @@ public:
   void SolveBasisInPlace(std::vector<Scalar> &x) const {
     // x' = Q^T x
     PermuteDense(x, this->shared_.dirty_scalar_,
-                 this->row_permutation_.GetInverse());
+                 this->col_permutation_.GetInverse());
 
     // U^T x' = x
     assert(false);
@@ -456,7 +467,7 @@ public:
                           Scalar tol = kEps) const;
   BasisChoiceStats ComputeStats() const;
 
-public:
+private:
   // L U = P C^T Q
   // L = (L_1^T L_2^T)^T
   // C' = Q U^T L_1^T
@@ -713,7 +724,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
 
 inline FactorizeResult
 BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
-                       const std::vector<Scalar> &) {
+                       const std::vector<Scalar> &priority) {
   // --- this function assumes ---
   // row_permutation_ is any
   // cols_permutation_ contains the final permutation
@@ -763,12 +774,27 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     }
 
     // --- pivot choice ---
+    Index mem_pivot;
+    {
+      Scalar b_tol = b_vector.GetValues()[0];
+      for (Index k = 1; k < b_vector.size(); k++) {
+        const Scalar b_abs = std::abs(b_vector.GetValues()[k]);
+        if (b_abs > b_tol) {
+          b_tol = b_abs;
+        }
+      }
+      b_tol = b_tol * kPivotTol;
 
-    Index mem_pivot = 0;
-    for (Index k = 0; k < b_vector.size(); k++) {
-      if (std::abs(b_vector.GetValues()[mem_pivot]) <
-          std::abs(b_vector.GetValues()[k])) {
-        mem_pivot = k;
+      mem_pivot = 0;
+      for (Index k = 0; k < b_vector.size(); k++) {
+        if (std::abs(b_vector.GetValues()[k]) <= b_tol) {
+          continue;
+        }
+
+        if (priority[b_vector.GetIndex()[k]] <
+            priority[b_vector.GetIndex()[mem_pivot]]) {
+          mem_pivot = k;
+        }
       }
     }
     const Index pivot = b_vector.GetIndex()[mem_pivot];
@@ -861,7 +887,7 @@ BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
       }
     }
 
-    if (j % 1000 == 0) {
+    if (j % 1000 == 1000 - 1) {
       LOG_INFO("Checked %i/%i cols\n", j + 1, this->nvectors_);
     }
   }

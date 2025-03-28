@@ -1,6 +1,8 @@
 #include "basis_choice.h"
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <random>
 
 struct MtxData {
   Index nrows;
@@ -37,8 +39,15 @@ MtxData ReadColumns(const char *filename) {
 }
 
 void TestCols(const MtxData &cols) {
+  std::default_random_engine rng(34);
+
   basis_choice::BasisChoice choice(cols.nrows, cols.ncols);
-  const std::vector<Scalar> priority;
+  std::vector<Scalar> priority(cols.ncols);
+
+  for (Index i = 0; i < cols.ncols; i++) {
+    priority[i] = i;
+  }
+  std::shuffle(priority.begin(), priority.end(), rng);
 
   Timer factorize_timer;
   choice.Factorize(cols.cols, priority);
@@ -46,13 +55,31 @@ void TestCols(const MtxData &cols) {
   LOG_INFO("Factorized in %f ms\n", elapsed / 1000.0);
 
   if (cols.nrows * cols.ncols < 1e8) {
-    const bool v = choice.CheckFactorization(cols.cols, 1e-8);
+    const bool v = choice.CheckFactorization(cols.cols, 1e-10);
     LOG_INFO("v=%i\n", v);
   } else {
     LOG_INFO("Skip check\n");
   }
 
   choice.ComputeStats().LogStats();
+
+  std::vector<Index> basis_idxs = choice.GetBasisVectors();
+
+  std::sort(basis_idxs.begin(), basis_idxs.end(),
+            [&](const Index &lhs, const Index &rhs) -> bool {
+              return priority[lhs] < priority[rhs];
+            });
+
+  for (Scalar q : {0.5, 0.75, 0.9, 1.0}) {
+    const Index k = std::ceil(q * cols.nrows) - 1;
+    const Index p = priority[basis_idxs[k]];
+    const Index min_p = k;
+    const Index max_p = cols.ncols - cols.nrows + k;
+
+    LOG_INFO("q=%5.1f%%, priority=%5i, deviation=%5i (<=%5i, %6.2f%%)\n",
+             q * 100.0, p, p - min_p, max_p - min_p,
+             double(p - min_p) / double(max_p - min_p) * 100.0);
+  }
 }
 
 const char *test_files[] = {
