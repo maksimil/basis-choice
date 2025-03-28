@@ -90,7 +90,7 @@ private:
 inline std::vector<Scalar> SparseVector::ToDense(size_t out_size) const {
   std::vector<Scalar> res(out_size, 0.0);
   for (Index i = 0; i < size(); ++i) {
-    assert(index_[i] < out_size);
+    assert(index_[i] < Index(out_size));
     res[index_[i]] = values_[i];
   }
   return res;
@@ -257,32 +257,37 @@ inline void PermuteDense(std::vector<Scalar> &v, std::vector<Scalar> &swap,
   swap.clear();
 }
 
-inline void SortSparse(SparseVector &v, Index dimension,
-                       std::vector<Index> &index_swap,
+inline void SortSparse(SparseVector &v, std::vector<Index> &index_swap,
                        std::vector<Scalar> &scalar_swap) {
-  assert(index_swap.size() == 0);
-  scalar_swap.resize(dimension);
+  index_swap.resize(2 * v.size());
 
-  for (SvIterator el(v); el; ++el) {
-    scalar_swap[el.index()] = el.value();
-    index_swap.push_back(el.index());
+  for (Index i = 0; i < v.size(); i++) {
+    index_swap[i] = i;
   }
 
-  std::sort(index_swap.begin(), index_swap.end());
-  v.Clear();
+  std::sort(index_swap.begin(), index_swap.begin() + v.size(),
+            [&](const Index &lhs, const Index &rhs) -> bool {
+              return v.GetIndex()[lhs] < v.GetIndex()[rhs];
+            });
 
-  for (Index i = 0; i < Index(index_swap.size()); i++) {
-    v.PushBack(index_swap[i], scalar_swap[index_swap[i]]);
+  for (Index i = 0; i < v.size(); i++) {
+    scalar_swap[i] = v.GetValues()[index_swap[i]];
+    index_swap[v.size() + i] = v.GetIndex()[index_swap[i]];
   }
 
-  index_swap.clear();
-  scalar_swap.clear();
+  for (Index i = 0; i < v.size(); i++) {
+    v.GetValues()[i] = scalar_swap[i];
+    v.GetIndex()[i] = index_swap[v.size() + i];
+  }
 
 #ifndef NDEBUG
   for (Index i = 1; i < v.size(); i++) {
     assert(v.GetIndex()[i - 1] < v.GetIndex()[i]);
   }
 #endif
+
+  scalar_swap.clear();
+  index_swap.clear();
 }
 
 inline void PermuteSparse(SparseVector &v,
@@ -293,7 +298,7 @@ inline void PermuteSparse(SparseVector &v,
     v.GetIndex()[i] = permutation[v.GetIndex()[i]];
   }
 
-  SortSparse(v, permutation.size(), index_swap, scalar_swap);
+  SortSparse(v, index_swap, scalar_swap);
 }
 
 class SharedMemory {
@@ -318,8 +323,8 @@ public:
 #ifndef NDEBUG
     assert(this->dirty_index_.size() == 0);
     assert(this->dirty_scalar_.size() == 0);
-    assert(this->dirty_index_.capacity() == this->n);
-    assert(this->dirty_scalar_.capacity() == this->n);
+    assert(this->dirty_index_.capacity() >= this->n);
+    assert(this->dirty_scalar_.capacity() >= this->n);
 
     assert(this->clean_index_.size() == this->n);
     for (Index k = 0; k < this->n; k++) {
@@ -581,7 +586,6 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
 }
 
 inline void LUBVectorCompute(SparseVector &b_vector,
-                             const std::vector<SparseVector> &lrows,
                              const std::vector<SparseVector> &lcols_tail,
                              const SparseVector &ucol, SharedMemory &shared) {
   shared.AssertClean();
@@ -614,8 +618,8 @@ inline void LUBVectorCompute(SparseVector &b_vector,
     memory_index[b_vector.GetIndex()[k]] = -1;
   }
 
-  SortSparse(b_vector, lrows.size(), shared.dirty_index_, shared.dirty_scalar_);
   PruneZeros(b_vector, kEps);
+  SortSparse(b_vector, shared.dirty_index_, shared.dirty_scalar_);
   shared.AssertClean();
 }
 
@@ -631,7 +635,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
   const SparseVector original_x = x;
   const std::vector<Scalar> original_x_dense = original_x.ToDense(lrows.size());
 #endif
-  assert(n < lcols.size());
+  assert(n < Index(lcols.size()));
 
   shared.AssertClean();
   std::vector<Index> &memory_index = shared.clean_index_;
@@ -660,7 +664,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
     }
   }
 
-  SortSparse(x, lrows.size(), shared.dirty_index_, shared.dirty_scalar_);
+  SortSparse(x, shared.dirty_index_, shared.dirty_scalar_);
 
   // compute the values
   for (Index k = 0; k < x.size() && x.GetIndex()[k] < n; k++) {
@@ -701,7 +705,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
   }
 
   // the rest
-  for (Index i = n; i < lrows.size(); i++) {
+  for (Index i = n; i < Index(lrows.size()); i++) {
     assert(result_x_dense[i] == original_x_dense[i]);
   }
 #endif
@@ -765,8 +769,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // compute the b_vector
 
-    LUBVectorCompute(b_vector, this->lrows_, this->lcols_tail_, upper_col,
-                     this->shared_);
+    LUBVectorCompute(b_vector, this->lcols_tail_, upper_col, this->shared_);
 
     // pivot choice
 
