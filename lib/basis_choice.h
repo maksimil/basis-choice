@@ -980,8 +980,11 @@ BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
 inline BasisChoiceStats BasisChoice::ComputeStats() const {
   BasisChoiceStats stats;
 
+  const Scalar dimension = Scalar(this->dimension_);
+  const Scalar nvectors = Scalar(this->nvectors_);
+
   // --- compute nnz ---
-  const Index u_spaces = this->dimension_ * (this->dimension_ - 1) / 2;
+  const Scalar u_spaces = dimension * (nvectors - 1) / 2;
 
   // U is from ucols
   for (Index i = 0; i < this->dimension_; i++) {
@@ -995,8 +998,8 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
     // stats.l_nnz += std::min(i, this->dimension_);
     stats.l_nnz += this->lrows_[i].size();
   }
-  stats.l_sparse = Scalar(stats.l_nnz) / (this->nvectors_ * this->dimension_ -
-                                          u_spaces - this->dimension_);
+  stats.l_sparse =
+      Scalar(stats.l_nnz) / (nvectors * dimension - u_spaces - dimension);
 
   // L1 is from lcols
   for (Index i = 0; i < this->dimension_; i++) {
@@ -1005,8 +1008,7 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
   stats.l1_sparse = Scalar(stats.l1_nnz) / u_spaces;
 
   stats.total_nnz = stats.u_nnz + stats.l_nnz + this->dimension_;
-  stats.total_sparse =
-      Scalar(stats.total_nnz) / (this->nvectors_ * this->dimension_);
+  stats.total_sparse = Scalar(stats.total_nnz) / (nvectors * dimension);
 
   // --- compute memory ---
   for (Index i = 0; i < this->nvectors_; i++) {

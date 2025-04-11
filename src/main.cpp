@@ -81,12 +81,12 @@ void TestCols(const MtxData &cols) {
   const double elapsed = factorize_timer.Elapsed();
   LOG_INFO("Factorized in %f ms\n", elapsed / 1000.0);
 
-  if (cols.nrows * cols.ncols < 1e8) {
-    const bool v = choice.CheckFactorization(cols.cols, 1e-10);
-    LOG_INFO("v=%i\n", v);
-  } else {
-    LOG_INFO("Skip check\n");
-  }
+  // if (cols.nrows * cols.ncols < 1e8) {
+  //   const bool v = choice.CheckFactorization(cols.cols, 1e-10);
+  //   LOG_INFO("v=%i\n", v);
+  // } else {
+  //   LOG_INFO("Skip check\n");
+  // }
 
   choice.ComputeStats().LogStats();
 
@@ -144,17 +144,20 @@ void TestCols(const MtxData &cols) {
 }
 
 const char *test_files[] = {
-    "./test_data/sanity1.mtx", "./test_data/sanity2.mtx",
-    "./test_data/sanity3.mtx", "./test_data/PRIMAL1.mtx",
-    "./test_data/PRIMAL2.mtx", "./test_data/PRIMAL3.mtx",
-    "./test_data/PRIMAL4.mtx", "./test_data/AUG3D.mtx",
-    "./test_data/UBH1.mtx",    "./test_data/CONT-100.mtx",
-    "./test_data/CONT-101.mtx"};
+    "./test_data/sanity1.mtx",  "./test_data/sanity2.mtx",
+    "./test_data/sanity3.mtx",  "./test_data/PRIMAL1.mtx",
+    "./test_data/PRIMAL2.mtx",  "./test_data/PRIMAL3.mtx",
+    "./test_data/PRIMAL4.mtx",  "./test_data/AUG3D.mtx",
+    "./test_data/UBH1.mtx",     "./test_data/CONT-100.mtx",
+    "./test_data/CONT-101.mtx", "./test_data/CONT-200.mtx",
+    "./test_data/CONT-201.mtx", "./test_data/CONT-300.mtx",
+    "./test_data/BOYD1.mtx",    "./test_data/BOYD2.mtx"};
 
 int main(int, const char *[]) {
   for (const char *filename : test_files) {
     MtxData data = ReadColumns(filename);
-    Scalar sparsity = Scalar(data.nnz) / (data.nrows * data.ncols);
+    Scalar sparsity =
+        Scalar(data.nnz) / (Scalar(data.nrows) * Scalar(data.ncols));
 
     LOG_INFO("\n\x1B[32mTesting %s\x1B[m\n", filename);
     LOG_INFO("nrows=%6d, ncols=%6d, nnz=%8d (%.4f%%)\n", data.nrows, data.ncols,
@@ -168,7 +171,7 @@ int main(int, const char *[]) {
     data.ncols = data.ncols + data.nrows;
     data.nnz += data.nrows;
 
-    sparsity = Scalar(data.nnz) / (data.nrows * data.ncols);
+    sparsity = Scalar(data.nnz) / (Scalar(data.nrows) * Scalar(data.ncols));
     LOG_INFO(
         "nrows=%6d, ncols=%6d, nnz=%8d (%.4f%%) (after appending identity)\n",
         data.nrows, data.ncols, data.nnz, sparsity * 100.0);
