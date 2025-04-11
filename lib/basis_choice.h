@@ -435,35 +435,7 @@ public:
 
   // TODO: implement COLAMD or a modification
   void ComputeQ(const std::vector<SparseVector> &ct_cols,
-                const std::vector<Scalar> &priority) {
-    std::vector<Scalar> &col_metric = this->shared_.dirty_scalar_;
-    col_metric.resize(this->dimension_);
-
-    for (Index j = 0; j < this->dimension_; j++) {
-      const SparseVector &col = ct_cols[j];
-
-      col_metric[j] = 0;
-
-      for (SvIterator el(col); el; ++el) {
-        if (priority[el.index()] < col_metric[j]) {
-          col_metric[j] = priority[el.index()];
-        }
-      }
-    }
-
-    this->col_permutation_.SetIdentity();
-    std::sort(this->col_permutation_.GetPermutation().begin(),
-              this->col_permutation_.GetPermutation().end(),
-              [&](const Index &lhs, const Index &rhs) -> bool {
-                if (col_metric[lhs] == col_metric[rhs]) {
-                  return ct_cols[lhs].size() < ct_cols[rhs].size();
-                } else {
-                  return col_metric[lhs] < col_metric[rhs];
-                }
-              });
-    this->col_permutation_.RestoreInverse();
-    this->col_permutation_.AssertIntegrity();
-  }
+                const std::vector<Scalar> &priority);
 
   FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_cols,
                             const std::vector<Scalar> &priority);
@@ -869,8 +841,9 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
           continue;
         }
 
-        if (priority[b_vector.GetIndex()[k]] <
-            priority[b_vector.GetIndex()[mem_pivot]]) {
+        if (priority[this->row_permutation_.Inverse(b_vector.GetIndex()[k])] <
+            priority[this->row_permutation_.Inverse(
+                b_vector.GetIndex()[mem_pivot])]) {
           mem_pivot = k;
         }
       }
@@ -1008,6 +981,37 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
       Scalar(stats.total_nnz) / (this->nvectors_ * this->dimension_);
 
   return stats;
+}
+
+inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_cols,
+                                  const std::vector<Scalar> &priority) {
+  std::vector<Scalar> &col_metric = this->shared_.dirty_scalar_;
+  col_metric.resize(this->dimension_);
+
+  for (Index j = 0; j < this->dimension_; j++) {
+    const SparseVector &col = ct_cols[j];
+
+    col_metric[j] = 0;
+
+    for (SvIterator el(col); el; ++el) {
+      if (priority[el.index()] < col_metric[j]) {
+        col_metric[j] = priority[el.index()];
+      }
+    }
+  }
+
+  this->col_permutation_.SetIdentity();
+  std::sort(this->col_permutation_.GetPermutation().begin(),
+            this->col_permutation_.GetPermutation().end(),
+            [&](const Index &lhs, const Index &rhs) -> bool {
+              if (col_metric[lhs] == col_metric[rhs]) {
+                return ct_cols[lhs].size() < ct_cols[rhs].size();
+              } else {
+                return col_metric[lhs] < col_metric[rhs];
+              }
+            });
+  this->col_permutation_.RestoreInverse();
+  this->col_permutation_.AssertIntegrity();
 }
 
 } // namespace basis_choice
