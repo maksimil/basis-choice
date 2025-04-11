@@ -1,6 +1,8 @@
 #ifndef __BASIS_CHOICE_H__
 #define __BASIS_CHOICE_H__
 
+// #define BASIS_CHOICE_CHECK_SOLVE
+
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -399,7 +401,7 @@ public:
   FactorizeResult FactorizeCT(const std::vector<SparseVector> &ct_cols,
                               const std::vector<Scalar> &priority) {
     // compute col permutation
-    this->ComputeQ(ct_cols);
+    this->ComputeQ(ct_cols, priority);
 
     // compute factorization
     const FactorizeResult r = this->ComputeLU(ct_cols, priority);
@@ -407,13 +409,33 @@ public:
     return r;
   }
 
-  void ComputeQ(const std::vector<SparseVector> &ct_cols) {
-    // TODO: implement COLAMD
+  // TODO: implement COLAMD or a modification
+  void ComputeQ(const std::vector<SparseVector> &ct_cols,
+                const std::vector<Scalar> &priority) {
+    std::vector<Scalar> &col_metric = this->shared_.dirty_scalar_;
+    col_metric.resize(this->dimension_);
+
+    for (Index j = 0; j < this->dimension_; j++) {
+      const SparseVector &col = ct_cols[j];
+
+      col_metric[j] = 0;
+
+      for (SvIterator el(col); el; ++el) {
+        if (priority[el.index()] < col_metric[j]) {
+          col_metric[j] = priority[el.index()];
+        }
+      }
+    }
+
     this->col_permutation_.SetIdentity();
     std::sort(this->col_permutation_.GetPermutation().begin(),
               this->col_permutation_.GetPermutation().end(),
               [&](const Index &lhs, const Index &rhs) -> bool {
-                return ct_cols[lhs].size() < ct_cols[rhs].size();
+                if (col_metric[lhs] == col_metric[rhs]) {
+                  return ct_cols[lhs].size() < ct_cols[rhs].size();
+                } else {
+                  return col_metric[lhs] < col_metric[rhs];
+                }
               });
     this->col_permutation_.RestoreInverse();
     this->col_permutation_.AssertIntegrity();
@@ -643,8 +665,10 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
                      const std::vector<SparseVector> &lrows, const Index n,
                      SparseVector &x, SharedMemory &shared) {
 #ifndef NDEBUG
+#ifdef BASIS_CHOICE_CHECK_SOLVE
   const SparseVector original_x = x;
   const std::vector<Scalar> original_x_dense = original_x.ToDense(lrows.size());
+#endif
 #endif
   assert(n < Index(lcols.size()));
 
@@ -702,8 +726,9 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
   PruneZeros(x, kEps);
   shared.AssertClean();
 
-  // check
+//   // check
 #ifndef NDEBUG
+#ifdef BASIS_CHOICE_CHECK_SOLVE
   const std::vector<Scalar> result_x_dense = x.ToDense(lrows.size());
 
   // first n rows
@@ -711,7 +736,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
     const Scalar err =
         original_x_dense[i] - (lrows[i] * result_x_dense + result_x_dense[i]);
     if (std::abs(err) > kEps) {
-      LOG_INFO("FTranL err i=%i, err=%f\n", i, err);
+      LOG_INFO("LUFTranL err i=%i, err=%.4e\n", i, err);
     }
   }
 
@@ -719,6 +744,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
   for (Index i = n; i < Index(lrows.size()); i++) {
     assert(result_x_dense[i] == original_x_dense[i]);
   }
+#endif
 #endif
 }
 
@@ -787,6 +813,13 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
       mem_pivot = 0;
       for (Index k = 0; k < b_vector.size(); k++) {
+        if (std::abs(b_vector.GetValues()[k]) > b_tol) {
+          mem_pivot = k;
+          break;
+        }
+      }
+
+      for (Index k = mem_pivot + 1; k < b_vector.size(); k++) {
         if (std::abs(b_vector.GetValues()[k]) <= b_tol) {
           continue;
         }

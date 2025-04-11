@@ -87,7 +87,9 @@ const char *test_files[] = {
     "./test_data/sanity3.mtx", "./test_data/PRIMAL1.mtx",
     "./test_data/PRIMAL2.mtx", "./test_data/PRIMAL3.mtx",
     "./test_data/PRIMAL4.mtx", "./test_data/AUG3D.mtx",
-    "./test_data/UBH1.mtx",
+    "./test_data/UBH1.mtx",    
+    // "./test_data/CONT-100.mtx",
+    // "./test_data/CONT-101.mtx"
 };
 
 int main(int, const char *[]) {
