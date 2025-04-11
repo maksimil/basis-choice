@@ -502,10 +502,17 @@ public:
                  this->col_permutation_.GetInverse());
 
     // U^T x' = x
-    assert(false);
+    for (Index i = 0; i < this->dimension_; i++) {
+      const Scalar product = this->ucols_[i] * x;
+      x[i] = (x[i] - product) / this->udiagonal_[i];
+    }
 
     // L_1^T x' = x
-    assert(false);
+    for (Index ii = 0; ii < this->dimension_; ii++) {
+      const Index i = this->dimension_ - 1 - ii;
+      const Scalar product = this->lcols_head_[i] * x;
+      x[i] = x[i] - product;
+    }
   }
 
   // checking L U = P C^T Q

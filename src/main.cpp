@@ -38,6 +38,33 @@ MtxData ReadColumns(const char *filename) {
   return MtxData{nrows, ncols, nnz, cols};
 }
 
+struct RhsCheck {
+  Scalar err1 = 0;
+  Scalar rhs1 = 0;
+};
+
+RhsCheck CheckRhs(const MtxData &cols, const basis_choice::BasisChoice &choice,
+                  const std::vector<Scalar> &rhs) {
+  std::vector<Scalar> res = choice.Solve(rhs);
+
+  std::vector<Scalar> mod_rhs(cols.nrows, 0.0);
+
+  for (Index j = 0; j < cols.ncols; j++) {
+    for (SvIterator el(cols.cols[j]); el; ++el) {
+      mod_rhs[el.index()] += el.value() * res[j];
+    }
+  }
+
+  RhsCheck check;
+
+  for (Index i = 0; i < cols.nrows; i++) {
+    check.err1 += std::abs(mod_rhs[i] - rhs[i]);
+    check.rhs1 += std::abs(rhs[i]);
+  }
+
+  return check;
+}
+
 void TestCols(const MtxData &cols) {
   std::default_random_engine rng(34);
 
@@ -80,6 +107,40 @@ void TestCols(const MtxData &cols) {
              q * 100.0, p, p - min_p, max_p - min_p,
              double(p - min_p) / double(max_p - min_p) * 100.0);
   }
+
+  Scalar sum_relative = 0.0;
+  const Index kCheckRuns = 100;
+  for (Index k = 0; k < kCheckRuns; k++) {
+    // LOG_INFO("k=%4d\n", k);
+    std::vector<Scalar> rhs(cols.nrows);
+    RhsCheck check;
+
+    for (Index i = 0; i < cols.nrows; i++) {
+      rhs[i] = std::exponential_distribution<Scalar>(1.0)(rng);
+    }
+    check = CheckRhs(cols, choice, rhs);
+    sum_relative += check.err1 / check.rhs1;
+    // LOG_INFO("exp(1):       err1=%.4e, relative=%.4e\n", check.err1,
+    //          check.err1 / check.rhs1);
+
+    for (Index i = 0; i < cols.nrows; i++) {
+      rhs[i] = std::normal_distribution<Scalar>(0.0, 1.0)(rng);
+    }
+    check = CheckRhs(cols, choice, rhs);
+    sum_relative += check.err1 / check.rhs1;
+    // LOG_INFO("normal(0, 1): err1=%.4e, relative=%.4e\n", check.err1,
+    //          check.err1 / check.rhs1);
+
+    for (Index i = 0; i < cols.nrows; i++) {
+      rhs[i] = std::normal_distribution<Scalar>(1.0, 1.0)(rng);
+    }
+    check = CheckRhs(cols, choice, rhs);
+    sum_relative += check.err1 / check.rhs1;
+    // LOG_INFO("normal(1, 1): err1=%.4e, relative=%.4e\n", check.err1,
+    //          check.err1 / check.rhs1);
+  }
+
+  LOG_INFO("Average relative err: %.4e\n", sum_relative / (3 * kCheckRuns));
 }
 
 const char *test_files[] = {
@@ -87,10 +148,8 @@ const char *test_files[] = {
     "./test_data/sanity3.mtx", "./test_data/PRIMAL1.mtx",
     "./test_data/PRIMAL2.mtx", "./test_data/PRIMAL3.mtx",
     "./test_data/PRIMAL4.mtx", "./test_data/AUG3D.mtx",
-    "./test_data/UBH1.mtx",    
-    // "./test_data/CONT-100.mtx",
-    // "./test_data/CONT-101.mtx"
-};
+    "./test_data/UBH1.mtx",    "./test_data/CONT-100.mtx",
+    "./test_data/CONT-101.mtx"};
 
 int main(int, const char *[]) {
   for (const char *filename : test_files) {
