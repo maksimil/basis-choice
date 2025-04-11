@@ -99,6 +99,16 @@ inline bool IsSorted(const SparseVector &x) {
   return true;
 }
 
+inline Index AllocatedMemory(const SparseVector &x) {
+  return x.GetIndex().capacity() * sizeof(Index) +
+         x.GetValues().capacity() * sizeof(Scalar);
+}
+
+inline Index UsedMemory(const SparseVector &x) {
+  return x.GetIndex().size() * sizeof(Index) +
+         x.GetValues().size() * sizeof(Scalar);
+}
+
 inline Index IndexMax(const SparseVector &x) {
   if (x.size() == 0) {
     return -1;
@@ -395,12 +405,22 @@ struct BasisChoiceStats {
   Index total_nnz = 0;
   Scalar total_sparse = 0.0;
 
+  // memory is computed only for values_ and index_ vectors inside L and U
+  // representations
+  Index used_size = 0;
+  Index allocated_size = 0;
+
   void LogStats() const {
-    LOG_INFO("nnz(L) = %i (%f%%), nnz(L1) = %i (%f%%), nnz(U) = %i (%f%%), "
-             "nnz(F) = %i (%f%%)\n",
+    LOG_INFO("nnz(L1) =%9i (%.4f%%), nnz(L) =%9i (%.4f%%)\n"
+             "nnz(U)  =%9i (%.4f%%), nnz(F) =%9i (%.4f%%)\n"
+             "used = %.4f Mb, allocated = %.4f Mb, waste = %.4f%%\n",
              this->l_nnz, this->l_sparse * 100.0, this->l1_nnz,
              this->l1_sparse * 100.0, this->u_nnz, this->u_sparse * 100.0,
-             this->total_nnz, this->total_sparse * 100.0);
+             this->total_nnz, this->total_sparse * 100.0,
+             Scalar(this->used_size) / Scalar(1024 * 1024),
+             Scalar(this->allocated_size) / Scalar(1024 * 1024),
+             Scalar(this->allocated_size - this->used_size) /
+                 Scalar(this->allocated_size) * 100);
   }
 };
 
@@ -781,7 +801,14 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
   b_vector.Reserve(this->nvectors_);
 
   for (Index j = 0; j < this->dimension_; j++) {
+    const Index reserve_size =
+        ct_cols[this->col_permutation_.Permute(j)].size();
+    this->lcols_head_[j].Reserve(reserve_size);
+    this->lcols_tail_[j].Reserve(reserve_size);
+    this->ucols_[j].Reserve(reserve_size);
+  }
 
+  for (Index j = 0; j < this->dimension_; j++) {
     // --- get and permute the next column ---
 
     SparseVector &upper_col = this->ucols_[j];
@@ -953,6 +980,7 @@ BasisChoice::CheckFactorization(const std::vector<SparseVector> &vectors,
 inline BasisChoiceStats BasisChoice::ComputeStats() const {
   BasisChoiceStats stats;
 
+  // --- compute nnz ---
   const Index u_spaces = this->dimension_ * (this->dimension_ - 1) / 2;
 
   // U is from ucols
@@ -979,6 +1007,23 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
   stats.total_nnz = stats.u_nnz + stats.l_nnz + this->dimension_;
   stats.total_sparse =
       Scalar(stats.total_nnz) / (this->nvectors_ * this->dimension_);
+
+  // --- compute memory ---
+  for (Index i = 0; i < this->nvectors_; i++) {
+    stats.allocated_size += AllocatedMemory(this->lrows_[i]);
+    stats.used_size += UsedMemory(this->lrows_[i]);
+  }
+
+  for (Index i = 0; i < this->dimension_; i++) {
+    stats.allocated_size += AllocatedMemory(this->lcols_head_[i]) +
+                            AllocatedMemory(this->lcols_tail_[i]) +
+                            AllocatedMemory(this->ucols_[i]) +
+                            AllocatedMemory(this->urows_[i]);
+
+    stats.used_size +=
+        UsedMemory(this->lcols_head_[i]) + UsedMemory(this->lcols_tail_[i]) +
+        UsedMemory(this->ucols_[i]) + UsedMemory(this->urows_[i]);
+  }
 
   return stats;
 }

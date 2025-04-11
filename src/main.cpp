@@ -157,7 +157,7 @@ int main(int, const char *[]) {
     Scalar sparsity = Scalar(data.nnz) / (data.nrows * data.ncols);
 
     LOG_INFO("\n\x1B[32mTesting %s\x1B[m\n", filename);
-    LOG_INFO("nrows=%6d, ncols=%6d, nnz=%8d (%f%%)\n", data.nrows, data.ncols,
+    LOG_INFO("nrows=%6d, ncols=%6d, nnz=%8d (%.4f%%)\n", data.nrows, data.ncols,
              data.nnz, sparsity * 100.0);
 
     // append an identity matrix
@@ -170,7 +170,7 @@ int main(int, const char *[]) {
 
     sparsity = Scalar(data.nnz) / (data.nrows * data.ncols);
     LOG_INFO(
-        "nrows=%6d, ncols=%6d, nnz=%8d (%f%%) (after appending identity)\n",
+        "nrows=%6d, ncols=%6d, nnz=%8d (%.4f%%) (after appending identity)\n",
         data.nrows, data.ncols, data.nnz, sparsity * 100.0);
 
     TestCols(data);
