@@ -88,7 +88,7 @@ void TestColsWithPriority(const MtxData &cols,
   const std::vector<SparseVector> &mtx_cols =
       basis_choice::MatrixConvertFromEigen(eigen_cols);
 #else
-  const std::vector<SparseVector> &mtx_cols = cols.cols
+  const std::vector<SparseVector> &mtx_cols = cols.cols;
 #endif
   Timer factorize_timer;
   choice.Factorize(mtx_cols, priority);
@@ -104,16 +104,16 @@ void TestColsWithPriority(const MtxData &cols,
 
   choice.ComputeStats().LogStats();
 
-  std::vector<Index> basis_idxs = choice.GetBasisVectors();
+  std::vector<Index> vector_order = choice.GetVectorOrder();
 
-  std::sort(basis_idxs.begin(), basis_idxs.end(),
+  std::sort(vector_order.begin(), vector_order.begin() + cols.nrows,
             [&](const Index &lhs, const Index &rhs) -> bool {
               return priority[lhs] > priority[rhs];
             });
 
   for (Scalar q : {0.5, 0.75, 0.9, 1.0}) {
     const Index k = std::ceil(q * cols.nrows) - 1;
-    const Index p = -priority[basis_idxs[k]];
+    const Index p = -priority[vector_order[k]];
     const Index min_p = k;
     const Index max_p = cols.ncols - cols.nrows + k;
 

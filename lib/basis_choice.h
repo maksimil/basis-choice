@@ -1,8 +1,6 @@
 #ifndef __BASIS_CHOICE_H__
 #define __BASIS_CHOICE_H__
 
-#include <Eigen/Core>
-#include <Eigen/SparseCore>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -506,12 +504,12 @@ public:
   FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_cols,
                             const std::vector<Scalar> &priority);
 
-  std::vector<Index> GetBasisVectors() const {
-    std::vector<Index> idxs(this->dimension_);
-    for (Index i = 0; i < this->dimension_; i++) {
-      idxs[i] = this->row_permutation_.Inverse(i);
-    }
-    return idxs;
+  // An array of indices with basis in the beginning:
+  // - First m indices are basis vectors
+  // - Rest n-m are non-basis
+  // m - dimension, n - nvectors
+  const std::vector<Index> &GetVectorOrder() const {
+    return this->row_permutation_.GetInverse();
   }
 
   // solve C x' = x
@@ -827,6 +825,13 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
 #endif
 }
 
+// Performs LU decomposition with partial pivoting according to [1]. Comments
+// reference pseudocode the algorithm in [1] as "the algorithm".
+//
+// [1] J. R. Gilbert and T. Peierls, "Sparse Partial Pivoting in Time
+// Proportional to Arithmetic Operations," SIAM Journal on Scientific and
+// Statistical Computing, vol. 9, no. 5, pp. 862-874, 1988,
+// doi: 10.1137/0909058.
 inline FactorizeResult
 BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
                        const std::vector<Scalar> &priority) {
@@ -857,15 +862,18 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
   for (Index j = 0; j < this->dimension_; j++) {
     // --- get and permute the next column ---
 
+    // get the next column according to the column permutation
     SparseVector &upper_col = this->ucols_[j];
     upper_col = ct_cols[this->col_permutation_.Permute(j)];
 
+    // applying already used partial pivoting row interchanges
     PermuteSparse(upper_col, this->row_permutation_.GetPermutation());
     SortSparse(upper_col, this->shared_.dirty_index_,
                this->shared_.dirty_scalar_);
 
     // --- split off and compute the upper part ---
 
+    // split off the b_vector (b_vector is the b in the algorithm)
     Index upper_size = 0;
     while (upper_size < upper_col.size() &&
            upper_col.GetIndex()[upper_size] < j) {
@@ -878,20 +886,25 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     upper_col.Resize(upper_size);
 
+    // line 3 of the algorithm (computing the upper column)
     LUFTranL(this->lcols_head_, this->lrows_, upper_col, this->shared_);
 
-    // --- compute the b_vector ---
+    // --- compute the b_vector (line 4 of the algorithm) ---
 
     LUBVectorCompute(b_vector, this->lcols_tail_, upper_col, this->shared_);
 
+    // --- pivot choice (line 5 of the algorithm) ---
+
+    // returning if singular
     if (b_vector.size() == 0) {
       return FactorizeResult::kSingular;
     }
 
-    // --- pivot choice ---
-
+    // pivot acceptability is defined by threshold partial pivoting, pivot is
+    // chosen to be acceptable with the best priority
     Index mem_pivot;
     {
+      // getting minimum absolute value of the pivot element
       Scalar b_tol = b_vector.GetValues()[0];
       for (Index k = 1; k < b_vector.size(); k++) {
         const Scalar b_abs = std::abs(b_vector.GetValues()[k]);
@@ -901,6 +914,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
       }
       b_tol = b_tol * kPivotTol;
 
+      // getting the first acceptable pivot
       mem_pivot = 0;
       for (Index k = 0; k < b_vector.size(); k++) {
         if (std::abs(b_vector.GetValues()[k]) > b_tol) {
@@ -909,6 +923,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
         }
       }
 
+      // getting the best acceptable pivot
       for (Index k = mem_pivot + 1; k < b_vector.size(); k++) {
         if (std::abs(b_vector.GetValues()[k]) <= b_tol) {
           continue;
@@ -926,8 +941,10 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // --- split off the upper diagonal ---
 
+    // line 6 of the algorithm (setting the diagonal)
     this->udiagonal_[j] = b_vector.GetValues()[mem_pivot];
 
+    // removing the pivot element from b_vector
     if (b_vector.GetIndex()[0] == j) {
       std::swap(b_vector.GetValues()[0], b_vector.GetValues()[mem_pivot]);
       b_vector.Erase(0);
@@ -936,7 +953,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
       b_vector.Erase(mem_pivot);
     }
 
-    // --- update the row permutation ---
+    // --- update the row permutation (swap j and pivot) ---
 
     const Index inverse_pivot = this->row_permutation_.Inverse(pivot);
     const Index inverse_j = this->row_permutation_.Inverse(j);
@@ -948,20 +965,20 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // --- update lower matrix ---
 
-    // permute tail and remove pivot row from tail
+    // permute lower tail and remove pivot row from it
     LUTailSwapRemoves(this->lcols_tail_, this->lrows_[j], this->lrows_[pivot],
                       pivot);
 
     // permute lower rows
     std::swap(this->lrows_[j], this->lrows_[pivot]);
 
-    // add the pivot row row to lower cols head
+    // add the pivot row row to lower head
     for (SvIterator el(this->lrows_[j]); el; ++el) {
       assert(el.index() < j);
       this->lcols_head_[el.index()].PushBack(j, el.value());
     }
 
-    // add a new col to lower rows
+    // line 7 of the algorithm (add the new col to lower rows)
     for (SvIterator el(b_vector); el; ++el) {
       assert(el.index() > j);
       this->lrows_[el.index()].PushBack(j, el.value() / this->udiagonal_[j]);
@@ -1094,7 +1111,7 @@ inline void SimpleOrdering(const std::vector<SparseVector> &cols,
     col_metric[j] = 0;
 
     for (SvIterator el(col); el; ++el) {
-      if (priority[el.index()] < col_metric[j]) {
+      if (priority[el.index()] > col_metric[j]) {
         col_metric[j] = priority[el.index()];
       }
     }
