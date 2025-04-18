@@ -110,7 +110,13 @@ void TestCols(const MtxData &cols) {
 
   Scalar sum_relative = 0.0;
   const Index kCheckRuns = 100;
+
+  std::vector<Scalar> errors;
+  errors.reserve(3 * kCheckRuns);
+
   for (Index k = 0; k < kCheckRuns; k++) {
+    Scalar err;
+
     // LOG_INFO("k=%4d\n", k);
     std::vector<Scalar> rhs(cols.nrows);
     RhsCheck check;
@@ -119,7 +125,9 @@ void TestCols(const MtxData &cols) {
       rhs[i] = std::exponential_distribution<Scalar>(1.0)(rng);
     }
     check = CheckRhs(cols, choice, rhs);
-    sum_relative += check.err1 / check.rhs1;
+    err = check.err1 / check.rhs1;
+    sum_relative += err;
+    errors.push_back(err);
     // LOG_INFO("exp(1):       err1=%.4e, relative=%.4e\n", check.err1,
     //          check.err1 / check.rhs1);
 
@@ -127,7 +135,9 @@ void TestCols(const MtxData &cols) {
       rhs[i] = std::normal_distribution<Scalar>(0.0, 1.0)(rng);
     }
     check = CheckRhs(cols, choice, rhs);
-    sum_relative += check.err1 / check.rhs1;
+    err = check.err1 / check.rhs1;
+    sum_relative += err;
+    errors.push_back(err);
     // LOG_INFO("normal(0, 1): err1=%.4e, relative=%.4e\n", check.err1,
     //          check.err1 / check.rhs1);
 
@@ -135,12 +145,22 @@ void TestCols(const MtxData &cols) {
       rhs[i] = std::normal_distribution<Scalar>(1.0, 1.0)(rng);
     }
     check = CheckRhs(cols, choice, rhs);
-    sum_relative += check.err1 / check.rhs1;
+    err = check.err1 / check.rhs1;
+    sum_relative += err;
+    errors.push_back(err);
     // LOG_INFO("normal(1, 1): err1=%.4e, relative=%.4e\n", check.err1,
     //          check.err1 / check.rhs1);
   }
 
-  LOG_INFO("Average relative err: %.4e\n", sum_relative / (3 * kCheckRuns));
+  std::sort(
+      errors.begin(), errors.end(),
+      [](const Scalar &lhs, const Scalar &rhs) -> bool { return lhs < rhs; });
+
+  LOG_INFO("Relative err: average=%11.4e, "
+           "q0=%11.4e, q1=%11.4e, q2=%11.4e, q3=%11.4e, q4=%11.4e\n",
+           sum_relative / (3 * kCheckRuns), errors[0],
+           errors[3 * kCheckRuns * 1 / 4], errors[3 * kCheckRuns * 2 / 4],
+           errors[3 * kCheckRuns * 3 / 4], errors[3 * kCheckRuns - 1]);
 }
 
 const char *test_files[] = {
