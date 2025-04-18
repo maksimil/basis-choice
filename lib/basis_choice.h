@@ -769,7 +769,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
     const Scalar err =
         original_x_dense[i] - (lrows[i] * result_x_dense + result_x_dense[i]);
     if (std::abs(err) > kEps) {
-      LOG_INFO("LUFTranL err i=%i, err=%.4e\n", i, err);
+      LOG_INFO("LUFTranL err i=%7i, err=%11.4e\n", i, err);
     }
   }
 

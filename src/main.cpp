@@ -4,6 +4,8 @@
 #include <fstream>
 #include <random>
 
+std::default_random_engine rng;
+
 struct MtxData {
   Index nrows;
   Index ncols;
@@ -38,9 +40,18 @@ MtxData ReadColumns(const char *filename) {
   return MtxData{nrows, ncols, nnz, cols};
 }
 
+void Normalize1(std::vector<Scalar> &x) {
+  Scalar x1 = 0.0;
+  for (Index i = 0; i < Index(x.size()); i++) {
+    x1 += std::abs(x[i]);
+  }
+  for (Index i = 0; i < Index(x.size()); i++) {
+    x[i] /= x1;
+  }
+}
+
 struct RhsCheck {
   Scalar err1 = 0;
-  Scalar rhs1 = 0;
 };
 
 RhsCheck CheckRhs(const MtxData &cols, const basis_choice::BasisChoice &choice,
@@ -59,22 +70,14 @@ RhsCheck CheckRhs(const MtxData &cols, const basis_choice::BasisChoice &choice,
 
   for (Index i = 0; i < cols.nrows; i++) {
     check.err1 += std::abs(mod_rhs[i] - rhs[i]);
-    check.rhs1 += std::abs(rhs[i]);
   }
 
   return check;
 }
 
-void TestCols(const MtxData &cols) {
-  std::default_random_engine rng(34);
-
+void TestColsWithPriority(const MtxData &cols,
+                          const std::vector<Scalar> &priority) {
   basis_choice::BasisChoice choice(cols.nrows, cols.ncols);
-  std::vector<Scalar> priority(cols.ncols);
-
-  for (Index i = 0; i < cols.ncols; i++) {
-    priority[i] = i;
-  }
-  std::shuffle(priority.begin(), priority.end(), rng);
 
   Timer factorize_timer;
   choice.Factorize(cols.cols, priority);
@@ -103,12 +106,12 @@ void TestCols(const MtxData &cols) {
     const Index min_p = k;
     const Index max_p = cols.ncols - cols.nrows + k;
 
-    LOG_INFO("q=%5.1f%%, priority=%5i, deviation=%5i (<=%5i, %6.2f%%)\n",
+    LOG_INFO("q=%5.1f%%, priority=%7i, deviation=%7i (<=%7i, %6.2f%%)\n",
              q * 100.0, p, p - min_p, max_p - min_p,
              double(p - min_p) / double(max_p - min_p) * 100.0);
   }
 
-  Scalar sum_relative = 0.0;
+  Scalar err_sum = 0.0;
   const Index kCheckRuns = 100;
 
   std::vector<Scalar> errors;
@@ -124,9 +127,10 @@ void TestCols(const MtxData &cols) {
     for (Index i = 0; i < cols.nrows; i++) {
       rhs[i] = std::exponential_distribution<Scalar>(1.0)(rng);
     }
+    Normalize1(rhs);
     check = CheckRhs(cols, choice, rhs);
-    err = check.err1 / check.rhs1;
-    sum_relative += err;
+    err = check.err1;
+    err_sum += err;
     errors.push_back(err);
     // LOG_INFO("exp(1):       err1=%.4e, relative=%.4e\n", check.err1,
     //          check.err1 / check.rhs1);
@@ -134,9 +138,10 @@ void TestCols(const MtxData &cols) {
     for (Index i = 0; i < cols.nrows; i++) {
       rhs[i] = std::normal_distribution<Scalar>(0.0, 1.0)(rng);
     }
+    Normalize1(rhs);
     check = CheckRhs(cols, choice, rhs);
-    err = check.err1 / check.rhs1;
-    sum_relative += err;
+    err = check.err1;
+    err_sum += err;
     errors.push_back(err);
     // LOG_INFO("normal(0, 1): err1=%.4e, relative=%.4e\n", check.err1,
     //          check.err1 / check.rhs1);
@@ -144,9 +149,10 @@ void TestCols(const MtxData &cols) {
     for (Index i = 0; i < cols.nrows; i++) {
       rhs[i] = std::normal_distribution<Scalar>(1.0, 1.0)(rng);
     }
+    Normalize1(rhs);
     check = CheckRhs(cols, choice, rhs);
-    err = check.err1 / check.rhs1;
-    sum_relative += err;
+    err = check.err1;
+    err_sum += err;
     errors.push_back(err);
     // LOG_INFO("normal(1, 1): err1=%.4e, relative=%.4e\n", check.err1,
     //          check.err1 / check.rhs1);
@@ -156,11 +162,26 @@ void TestCols(const MtxData &cols) {
       errors.begin(), errors.end(),
       [](const Scalar &lhs, const Scalar &rhs) -> bool { return lhs < rhs; });
 
-  LOG_INFO("Relative err: average=%11.4e, "
+  LOG_INFO("Solve error: average=%11.4e, "
            "q0=%11.4e, q1=%11.4e, q2=%11.4e, q3=%11.4e, q4=%11.4e\n",
-           sum_relative / (3 * kCheckRuns), errors[0],
+           err_sum / (3 * kCheckRuns), errors[0],
            errors[3 * kCheckRuns * 1 / 4], errors[3 * kCheckRuns * 2 / 4],
            errors[3 * kCheckRuns * 3 / 4], errors[3 * kCheckRuns - 1]);
+}
+
+void TestCols(const MtxData &cols) {
+  std::vector<Scalar> priority(cols.ncols);
+
+  for (Index i = 0; i < cols.ncols; i++) {
+    priority[i] = i;
+  }
+
+  for (Index k = 0; k < 3; k++) {
+    std::shuffle(priority.begin(), priority.end(), rng);
+
+    LOG_INFO("\x1B[34mPriority %2i\x1B[m\n", k);
+    TestColsWithPriority(cols, priority);
+  }
 }
 
 const char *test_files[] = {
@@ -174,6 +195,8 @@ const char *test_files[] = {
     "./test_data/BOYD1.mtx",    "./test_data/BOYD2.mtx"};
 
 int main(int, const char *[]) {
+  rng = std::default_random_engine(42);
+
   for (const char *filename : test_files) {
     MtxData data = ReadColumns(filename);
     Scalar sparsity =
