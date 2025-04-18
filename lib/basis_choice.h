@@ -1,8 +1,8 @@
 #ifndef __BASIS_CHOICE_H__
 #define __BASIS_CHOICE_H__
 
-// #define BASIS_CHOICE_CHECK_SOLVE
-
+#include <Eigen/Core>
+#include <Eigen/SparseCore>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -12,6 +12,12 @@
 #include <cstdlib>
 #include <limits>
 #include <vector>
+
+#ifdef USE_EIGEN
+#include <Eigen/Sparse>
+#endif
+
+// #define BASIS_CHOICE_CHECK_SOLVE
 
 #define LOG_INFO(...) fprintf(stdout, __VA_ARGS__)
 
@@ -99,14 +105,14 @@ inline bool IsSorted(const SparseVector &x) {
   return true;
 }
 
-inline Index AllocatedMemory(const SparseVector &x) {
-  return x.GetIndex().capacity() * sizeof(Index) +
-         x.GetValues().capacity() * sizeof(Scalar);
+inline Scalar AllocatedMemory(const SparseVector &x) {
+  return Scalar(x.GetIndex().capacity()) * sizeof(Index) +
+         Scalar(x.GetValues().capacity()) * sizeof(Scalar);
 }
 
-inline Index UsedMemory(const SparseVector &x) {
-  return x.GetIndex().size() * sizeof(Index) +
-         x.GetValues().size() * sizeof(Scalar);
+inline Scalar UsedMemory(const SparseVector &x) {
+  return Scalar(x.GetIndex().size()) * sizeof(Index) +
+         Scalar(x.GetValues().size()) * sizeof(Scalar);
 }
 
 inline Index IndexMax(const SparseVector &x) {
@@ -200,6 +206,45 @@ constexpr Scalar kEps = 1e-12;
 
 // tol for pivot choice
 constexpr Scalar kPivotTol = 1e-3;
+
+#ifdef USE_EIGEN
+using EigenSparseMatrix = Eigen::SparseMatrix<Scalar, Eigen::ColMajor, Index>;
+
+inline std::vector<SparseVector>
+MatrixConvertFromEigen(const EigenSparseMatrix &mtx) {
+  std::vector<SparseVector> cols(mtx.cols());
+
+  for (Index k = 0; k < mtx.outerSize(); k++) {
+    for (EigenSparseMatrix::InnerIterator it(mtx, k); it; ++it) {
+      const Index i = it.row();
+      const Index j = it.col();
+      const Scalar v = it.value();
+      cols[j].PushBack(i, v);
+    }
+  }
+
+  return cols;
+}
+
+inline EigenSparseMatrix
+MatrixConvertToEigen(const std::vector<SparseVector> &cols) {
+  std::vector<Eigen::Triplet<Scalar>> triplets;
+  Index nrows = 0;
+
+  for (Index j = 0; j < Index(cols.size()); j++) {
+    for (SvIterator el(cols[j]); el; ++el) {
+      triplets.emplace_back(el.index(), j, el.value());
+      nrows = std::max(nrows, el.index());
+    }
+  }
+
+  nrows += 1;
+
+  EigenSparseMatrix mtx(nrows, cols.size());
+  mtx.setFromTriplets(triplets.begin(), triplets.end());
+  return mtx;
+}
+#endif
 
 inline std::vector<SparseVector>
 ComputeRowRepresentation(const std::vector<SparseVector> &cols, Index nrows) {
@@ -334,7 +379,8 @@ inline void SortSparse(SparseVector &v, std::vector<Index> &index_swap,
   index_swap.clear();
 }
 
-void PermuteSparse(SparseVector &v, const std::vector<Index> &permutation) {
+inline void PermuteSparse(SparseVector &v,
+                          const std::vector<Index> &permutation) {
   for (Index i = 0; i < v.size(); i++) {
     v.GetIndex()[i] = permutation[v.GetIndex()[i]];
   }
@@ -407,19 +453,19 @@ struct BasisChoiceStats {
 
   // memory is computed only for values_ and index_ vectors inside L and U
   // representations
-  Index used_size = 0;
-  Index allocated_size = 0;
+  Scalar used_size = 0;
+  Scalar allocated_size = 0;
 
   void LogStats() const {
-    LOG_INFO("nnz(L1) =%9i (%.4f%%), nnz(L) =%9i (%.4f%%)\n"
-             "nnz(U)  =%9i (%.4f%%), nnz(F) =%9i (%.4f%%)\n"
-             "used = %.4f Mb, allocated = %.4f Mb, waste = %.4f%%\n",
-             this->l_nnz, this->l_sparse * 100.0, this->l1_nnz,
-             this->l1_sparse * 100.0, this->u_nnz, this->u_sparse * 100.0,
+    LOG_INFO("nnz(L1) =%9i (%8.4f%%), nnz(L) =%9i (%8.4f%%)\n"
+             "nnz(U)  =%9i (%8.4f%%), nnz(F) =%9i (%8.4f%%)\n"
+             "used =%10.4f Mb, allocated =%10.4f Mb, waste =%8.2f%%\n",
+             this->l1_nnz, this->l1_sparse * 100.0, this->l_nnz,
+             this->l_sparse * 100.0, this->u_nnz, this->u_sparse * 100.0,
              this->total_nnz, this->total_sparse * 100.0,
-             Scalar(this->used_size) / Scalar(1024 * 1024),
-             Scalar(this->allocated_size) / Scalar(1024 * 1024),
-             Scalar(this->allocated_size - this->used_size) /
+             this->used_size / Scalar(1024 * 1024),
+             this->allocated_size / Scalar(1024 * 1024),
+             (this->allocated_size - this->used_size) /
                  Scalar(this->allocated_size) * 100);
   }
 };
@@ -868,7 +914,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
           continue;
         }
 
-        if (priority[this->row_permutation_.Inverse(b_vector.GetIndex()[k])] <
+        if (priority[this->row_permutation_.Inverse(b_vector.GetIndex()[k])] >
             priority[this->row_permutation_.Inverse(
                 b_vector.GetIndex()[mem_pivot])]) {
           mem_pivot = k;
@@ -902,14 +948,14 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // --- update lower matrix ---
 
-    // permute tail and remove pivot row
+    // permute tail and remove pivot row from tail
     LUTailSwapRemoves(this->lcols_tail_, this->lrows_[j], this->lrows_[pivot],
                       pivot);
 
     // permute lower rows
     std::swap(this->lrows_[j], this->lrows_[pivot]);
 
-    // add the pivot row row to lower cols
+    // add the pivot row row to lower cols head
     for (SvIterator el(this->lrows_[j]); el; ++el) {
       assert(el.index() < j);
       this->lcols_head_[el.index()].PushBack(j, el.value());
@@ -984,7 +1030,7 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
   const Scalar nvectors = Scalar(this->nvectors_);
 
   // --- compute nnz ---
-  const Scalar u_spaces = dimension * (nvectors - 1) / 2;
+  const Scalar u_spaces = dimension * (dimension - 1) / 2;
 
   // U is from ucols
   for (Index i = 0; i < this->dimension_; i++) {
@@ -1030,13 +1076,20 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
   return stats;
 }
 
-inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_cols,
-                                  const std::vector<Scalar> &priority) {
-  std::vector<Scalar> &col_metric = this->shared_.dirty_scalar_;
-  col_metric.resize(this->dimension_);
+// inline void COLAMD(const Index &nrows, const Index &ncols,
+//                    const std::vector<SparseVector> &cols,
+//                    Permutation &permutation) {
+//
+// }
 
-  for (Index j = 0; j < this->dimension_; j++) {
-    const SparseVector &col = ct_cols[j];
+inline void SimpleOrdering(const std::vector<SparseVector> &cols,
+                           const std::vector<Scalar> &priority,
+                           Permutation &permutation) {
+  const Index ncols = cols.size();
+  std::vector<Scalar> col_metric(ncols);
+
+  for (Index j = 0; j < ncols; j++) {
+    const SparseVector &col = cols[j];
 
     col_metric[j] = 0;
 
@@ -1047,17 +1100,25 @@ inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_cols,
     }
   }
 
-  this->col_permutation_.SetIdentity();
-  std::sort(this->col_permutation_.GetPermutation().begin(),
-            this->col_permutation_.GetPermutation().end(),
+  permutation.SetIdentity();
+  std::sort(permutation.GetPermutation().begin(),
+            permutation.GetPermutation().end(),
             [&](const Index &lhs, const Index &rhs) -> bool {
               if (col_metric[lhs] == col_metric[rhs]) {
-                return ct_cols[lhs].size() < ct_cols[rhs].size();
+                return cols[lhs].size() < cols[rhs].size();
               } else {
-                return col_metric[lhs] < col_metric[rhs];
+                return col_metric[lhs] > col_metric[rhs];
               }
             });
-  this->col_permutation_.RestoreInverse();
+  permutation.RestoreInverse();
+}
+
+inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_cols,
+                                  const std::vector<Scalar> &priority) {
+  SimpleOrdering(ct_cols, priority, this->col_permutation_);
+
+  // COLAMD(this->nvectors_, this->dimension_, ct_cols, this->col_permutation_);
+
   this->col_permutation_.AssertIntegrity();
 }
 

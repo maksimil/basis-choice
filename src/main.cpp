@@ -4,6 +4,8 @@
 #include <fstream>
 #include <random>
 
+#define CHECK_DECOMPOSITION
+
 std::default_random_engine rng;
 
 struct MtxData {
@@ -79,8 +81,17 @@ void TestColsWithPriority(const MtxData &cols,
                           const std::vector<Scalar> &priority) {
   basis_choice::BasisChoice choice(cols.nrows, cols.ncols);
 
+#ifdef USE_EIGEN
+  // Just to test conversions
+  basis_choice::EigenSparseMatrix eigen_cols =
+      basis_choice::MatrixConvertToEigen(cols.cols);
+  const std::vector<SparseVector> &mtx_cols =
+      basis_choice::MatrixConvertFromEigen(eigen_cols);
+#else
+  const std::vector<SparseVector> &mtx_cols = cols.cols
+#endif
   Timer factorize_timer;
-  choice.Factorize(cols.cols, priority);
+  choice.Factorize(mtx_cols, priority);
   const double elapsed = factorize_timer.Elapsed();
   LOG_INFO("Factorized in %f ms\n", elapsed / 1000.0);
 
@@ -97,12 +108,12 @@ void TestColsWithPriority(const MtxData &cols,
 
   std::sort(basis_idxs.begin(), basis_idxs.end(),
             [&](const Index &lhs, const Index &rhs) -> bool {
-              return priority[lhs] < priority[rhs];
+              return priority[lhs] > priority[rhs];
             });
 
   for (Scalar q : {0.5, 0.75, 0.9, 1.0}) {
     const Index k = std::ceil(q * cols.nrows) - 1;
-    const Index p = priority[basis_idxs[k]];
+    const Index p = -priority[basis_idxs[k]];
     const Index min_p = k;
     const Index max_p = cols.ncols - cols.nrows + k;
 
@@ -111,6 +122,7 @@ void TestColsWithPriority(const MtxData &cols,
              double(p - min_p) / double(max_p - min_p) * 100.0);
   }
 
+#ifdef CHECK_DECOMPOSITION
   Scalar err_sum = 0.0;
   const Index kCheckRuns = 100;
 
@@ -167,13 +179,14 @@ void TestColsWithPriority(const MtxData &cols,
            err_sum / (3 * kCheckRuns), errors[0],
            errors[3 * kCheckRuns * 1 / 4], errors[3 * kCheckRuns * 2 / 4],
            errors[3 * kCheckRuns * 3 / 4], errors[3 * kCheckRuns - 1]);
+#endif
 }
 
 void TestCols(const MtxData &cols) {
   std::vector<Scalar> priority(cols.ncols);
 
   for (Index i = 0; i < cols.ncols; i++) {
-    priority[i] = i;
+    priority[i] = -i;
   }
 
   for (Index k = 0; k < 3; k++) {

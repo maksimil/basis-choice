@@ -9,6 +9,12 @@ file(GLOB LIB_SRC ./lib/*.cpp)
 
 add_executable(basis-choice ${LIB_SRC} ${EXE_SRC})
 
+if (${USE_EIGEN})
+    find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+    target_link_libraries(basis-choice Eigen3::Eigen)
+    target_compile_definitions(basis-choice PRIVATE USE_EIGEN)
+endif()
+
 if (${PROFILE_BUILD})
     target_compile_options(basis-choice PRIVATE -fno-omit-frame-pointer -fno-inline)
 endif()
