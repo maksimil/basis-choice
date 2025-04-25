@@ -455,13 +455,15 @@ struct BasisChoiceStats {
   Scalar allocated_size = 0;
 
   void LogStats() const {
-    LOG_INFO("nnz(L1) =%9i (%8.4f%%), nnz(L) =%9i (%8.4f%%)\n"
-             "nnz(U)  =%9i (%8.4f%%), nnz(F) =%9i (%8.4f%%)\n"
+    LOG_INFO("nnz(L1)   =%9i (%8.4f%%), nnz(L) =%9i (%8.4f%%), "
+             "nnz(U) =%9i (%8.4f%%)\n"
+             "nnz(L1+U) =%9i (%8.4f%%), nnz(F) =%9i (%8.4f%%)\n"
              "used =%10.4f Mb, allocated =%10.4f Mb, waste =%8.2f%%\n",
              this->l1_nnz, this->l1_sparse * 100.0, this->l_nnz,
              this->l_sparse * 100.0, this->u_nnz, this->u_sparse * 100.0,
-             this->total_nnz, this->total_sparse * 100.0,
-             this->used_size / Scalar(1024 * 1024),
+             this->l1_nnz + this->u_nnz,
+             (this->l1_sparse + this->u_sparse) / 2.0 * 100.0, this->total_nnz,
+             this->total_sparse * 100.0, this->used_size / Scalar(1024 * 1024),
              this->allocated_size / Scalar(1024 * 1024),
              (this->allocated_size - this->used_size) /
                  Scalar(this->allocated_size) * 100);
@@ -837,7 +839,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
                        const std::vector<Scalar> &priority) {
   // --- this function assumes ---
   // row_permutation_ is any
-  // cols_permutation_ contains the final permutation
+  // col_permutation_ contains the final permutation
   // lrows_ is final size with empty elements
   // lcols_head_ is final size with empty elements
   // lcols_tail_ is final size with empty elements
@@ -1108,7 +1110,13 @@ inline void SimpleOrdering(const std::vector<SparseVector> &cols,
   for (Index j = 0; j < ncols; j++) {
     const SparseVector &col = cols[j];
 
-    col_metric[j] = 0;
+    col_metric[j] = priority[col.GetIndex()[0]];
+
+    for (Index k = 0; k < col.size(); k++) {
+      if (priority[col.GetIndex()[k]] > col_metric[j]) {
+        col_metric[j] = priority[col.GetIndex()[k]];
+      }
+    }
 
     for (SvIterator el(col); el; ++el) {
       if (priority[el.index()] > col_metric[j]) {
@@ -1121,18 +1129,84 @@ inline void SimpleOrdering(const std::vector<SparseVector> &cols,
   std::sort(permutation.GetPermutation().begin(),
             permutation.GetPermutation().end(),
             [&](const Index &lhs, const Index &rhs) -> bool {
-              if (col_metric[lhs] == col_metric[rhs]) {
-                return cols[lhs].size() < cols[rhs].size();
-              } else {
-                return col_metric[lhs] > col_metric[rhs];
-              }
+              std::pair<Scalar, Scalar> lhs_pair, rhs_pair;
+
+              lhs_pair = {-col_metric[lhs], cols[lhs].size()};
+              rhs_pair = {-col_metric[rhs], cols[rhs].size()};
+
+              return lhs_pair < rhs_pair;
             });
+  permutation.RestoreInverse();
+}
+
+constexpr Index kMarkowitzNSections = 10;
+
+inline void PriorityMarkowitzOrdering(const Index nrows,
+                                      const std::vector<SparseVector> &cols,
+                                      const std::vector<Scalar> &priority,
+                                      Permutation &permutation) {
+  // index of the max priority row of the column
+  std::vector<Index> col_max_priority(cols.size());
+  std::vector<Index> row_size(nrows, 0);
+
+  for (Index j = 0; j < Index(cols.size()); j++) {
+    Index i = cols[j].GetIndex()[0];
+    row_size[i] += 1;
+
+    for (Index k = 1; k < cols[j].size(); k++) {
+      const Index ip = cols[j].GetIndex()[k];
+      row_size[ip] += 1;
+
+      if (priority[i] < priority[ip]) {
+        i = ip;
+      }
+    }
+
+    col_max_priority[j] = i;
+  }
+
+  permutation.SetIdentity();
+
+  std::vector<Index> &perm = permutation.GetPermutation();
+
+  std::sort(perm.begin(), perm.end(),
+            [&](const Index &lhs, const Index &rhs) -> bool {
+              return priority[col_max_priority[lhs]] >
+                     priority[col_max_priority[rhs]];
+            });
+
+  const Index section_size =
+      (cols.size() + kMarkowitzNSections - 1) / kMarkowitzNSections;
+
+  if (section_size == 1) {
+    permutation.RestoreInverse();
+    return;
+  }
+
+  for (Index k = 0; k < kMarkowitzNSections; k++) {
+    const Index start = k * section_size;
+    const Index end = std::min(Index(cols.size()), start + section_size);
+
+    std::sort(
+        perm.begin() + start, perm.begin() + end,
+        [&](const Index &lhs, const Index &rhs) -> bool {
+          const Index lhs_markowitz =
+              (cols[lhs].size() - 1) * (row_size[col_max_priority[lhs]] - 1);
+          const Index rhs_markowitz =
+              (cols[rhs].size() - 1) * (row_size[col_max_priority[rhs]] - 1);
+          return lhs_markowitz < rhs_markowitz;
+        });
+  }
+
   permutation.RestoreInverse();
 }
 
 inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_cols,
                                   const std::vector<Scalar> &priority) {
-  SimpleOrdering(ct_cols, priority, this->col_permutation_);
+  // this->col_permutation_.SetIdentity();
+  // SimpleOrdering(ct_cols, priority, this->col_permutation_);
+  PriorityMarkowitzOrdering(this->nvectors_, ct_cols, priority,
+                            this->col_permutation_);
 
   // COLAMD(this->nvectors_, this->dimension_, ct_cols, this->col_permutation_);
 

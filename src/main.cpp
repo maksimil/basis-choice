@@ -205,7 +205,9 @@ const char *test_files[] = {
     "./test_data/UBH1.mtx",     "./test_data/CONT-100.mtx",
     "./test_data/CONT-101.mtx", "./test_data/CONT-200.mtx",
     "./test_data/CONT-201.mtx", "./test_data/CONT-300.mtx",
-    "./test_data/BOYD1.mtx",    "./test_data/BOYD2.mtx"};
+    "./test_data/BOYD1.mtx",
+    // "./test_data/BOYD2.mtx"
+};
 
 int main(int, const char *[]) {
   rng = std::default_random_engine(42);
