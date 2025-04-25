@@ -1183,7 +1183,7 @@ inline void PriorityMarkowitzOrdering(const Index nrows,
     return;
   }
 
-  for (Index k = 0; k < kMarkowitzNSections; k++) {
+  for (Index k = 0; k * section_size < Index(cols.size()); k++) {
     const Index start = k * section_size;
     const Index end = std::min(Index(cols.size()), start + section_size);
 

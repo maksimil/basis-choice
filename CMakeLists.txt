@@ -19,6 +19,5 @@ if (${PROFILE_BUILD})
     target_compile_options(basis-choice PRIVATE -fno-omit-frame-pointer -fno-inline)
 endif()
 
-target_compile_features(basis-choice PRIVATE cxx_std_11)
-target_compile_options(basis-choice PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(basis-choice PRIVATE -std=c++11 -Wall -Wextra -Wpedantic -Werror)
 target_include_directories(basis-choice PRIVATE ./src ./lib)
