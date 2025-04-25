@@ -484,14 +484,15 @@ public:
                             const std::vector<Scalar> &priority) {
     const std::vector<SparseVector> row_rep =
         ComputeRowRepresentation(vectors, this->dimension_);
-    return this->FactorizeCT(row_rep, priority);
+    return this->FactorizeCT(vectors, row_rep, priority);
   }
 
   // factorize in terms of rows of input vectors
-  FactorizeResult FactorizeCT(const std::vector<SparseVector> &ct_cols,
+  FactorizeResult FactorizeCT(const std::vector<SparseVector> &ct_rows,
+                              const std::vector<SparseVector> &ct_cols,
                               const std::vector<Scalar> &priority) {
     // compute col permutation
-    this->ComputeQ(ct_cols, priority);
+    this->ComputeQ(ct_rows, ct_cols, priority);
 
     // compute factorization
     const FactorizeResult r = this->ComputeLU(ct_cols, priority);
@@ -499,8 +500,8 @@ public:
     return r;
   }
 
-  // TODO: implement COLAMD or a modification
-  void ComputeQ(const std::vector<SparseVector> &ct_cols,
+  void ComputeQ(const std::vector<SparseVector> &ct_rows,
+                const std::vector<SparseVector> &ct_cols,
                 const std::vector<Scalar> &priority);
 
   FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_cols,
@@ -1095,13 +1096,14 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
   return stats;
 }
 
-// inline void COLAMD(const Index &nrows, const Index &ncols,
-//                    const std::vector<SparseVector> &cols,
-//                    Permutation &permutation) {
-//
-// }
+inline void NoOrdering(const std::vector<SparseVector> &,
+                       const std::vector<SparseVector> &,
+                       const std::vector<Scalar> &, Permutation &permutation) {
+  permutation.SetIdentity();
+}
 
-inline void SimpleOrdering(const std::vector<SparseVector> &cols,
+inline void SimpleOrdering(const std::vector<SparseVector> &,
+                           const std::vector<SparseVector> &cols,
                            const std::vector<Scalar> &priority,
                            Permutation &permutation) {
   const Index ncols = cols.size();
@@ -1141,13 +1143,13 @@ inline void SimpleOrdering(const std::vector<SparseVector> &cols,
 
 constexpr Index kMarkowitzNSections = 10;
 
-inline void PriorityMarkowitzOrdering(const Index nrows,
+inline void PriorityMarkowitzOrdering(const std::vector<SparseVector> &rows,
                                       const std::vector<SparseVector> &cols,
                                       const std::vector<Scalar> &priority,
                                       Permutation &permutation) {
   // index of the max priority row of the column
   std::vector<Index> col_max_priority(cols.size());
-  std::vector<Index> row_size(nrows, 0);
+  std::vector<Index> row_size(rows.size(), 0);
 
   for (Index j = 0; j < Index(cols.size()); j++) {
     Index i = cols[j].GetIndex()[0];
@@ -1201,14 +1203,140 @@ inline void PriorityMarkowitzOrdering(const Index nrows,
   permutation.RestoreInverse();
 }
 
-inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_cols,
-                                  const std::vector<Scalar> &priority) {
-  // this->col_permutation_.SetIdentity();
-  // SimpleOrdering(ct_cols, priority, this->col_permutation_);
-  PriorityMarkowitzOrdering(this->nvectors_, ct_cols, priority,
-                            this->col_permutation_);
+struct COLAMDRowInfo {
+  Index start = 0;
+  Index end = 0;
+};
 
-  // COLAMD(this->nvectors_, this->dimension_, ct_cols, this->col_permutation_);
+struct COLAMDColInfo {
+  Index start = 0;
+  Index end = 0;
+};
+
+inline void COLAMD(const std::vector<SparseVector> &rows,
+                   const std::vector<SparseVector> &cols,
+                   const std::vector<Scalar> &, Permutation &permutation) {
+  const Index nrows = rows.size();
+  const Index ncols = cols.size();
+
+  assert(ncols <= nrows);
+
+  Index nnz = 0;
+  for (Index j = 0; j < ncols; j++) {
+    nnz += cols[j].size();
+  }
+
+  permutation.SetIdentity();
+
+  std::vector<Index> l_size(ncols, 0);
+  std::vector<COLAMDRowInfo> pivot_row_info(ncols);
+  std::vector<COLAMDColInfo> col_info(ncols);
+
+  std::vector<Index> pivot_row_idx;
+  pivot_row_idx.reserve(nnz);
+
+  std::vector<Index> col_idx;
+  col_idx.reserve(nnz);
+
+  // initialize col_info and col_idx
+  for (Index j = 0; j < ncols; j++) {
+    col_info[j].start = col_idx.size();
+    for (Index i : cols[j].GetIndex()) {
+      col_idx.push_back(i);
+    }
+    col_info[j].end = col_idx.size();
+  }
+
+  std::vector<bool> mask(nrows + ncols, false);
+
+  for (Index k = 0; k < ncols; k++) {
+    COLAMDRowInfo &row_info = pivot_row_info[k];
+
+    // --- upper bound pattern of the pivot row and nnz in pivot col ---
+
+    assert(l_size[k] == 0);
+    mask[k] = true;
+    row_info.start = pivot_row_idx.size();
+    for (Index ii = col_info[k].start; ii < col_info[k].end; ii++) {
+      Index i = col_idx[ii];
+
+      if (i < nrows) {
+        l_size[k] += 1;
+
+        for (Index j : rows[i].GetIndex()) {
+          assert(j < ncols);
+          assert(j >= k);
+          if (!mask[j]) {
+            mask[j] = true;
+            pivot_row_idx.push_back(j);
+          }
+        }
+      } else {
+        i = i - nrows;
+
+        l_size[k] += l_size[i];
+
+        for (Index ii = pivot_row_info[i].start; ii < pivot_row_info[i].end;
+             ii++) {
+          const Index j = pivot_row_idx[ii];
+          assert(j < ncols);
+          assert(j >= k);
+          if (!mask[j]) {
+            mask[j] = true;
+            pivot_row_idx.push_back(j);
+          }
+        }
+      }
+    }
+    row_info.end = pivot_row_idx.size();
+    l_size[k] -= 1;
+
+    mask[k] = false;
+    for (Index jj = row_info.start; jj < row_info.end; jj++) {
+      mask[pivot_row_idx[jj]] = false;
+    }
+
+    // --- symbolic update ---
+
+    for (Index ii = col_info[k].start; ii < col_info[k].end; ii++) {
+      mask[col_idx[ii]] = true;
+    }
+    for (Index jj = row_info.start; jj < row_info.end; jj++) {
+      const Index j = pivot_row_idx[jj];
+      Index p = col_info[j].start;
+      while (p < col_info[j].end) {
+        if (mask[col_idx[p]]) {
+          std::swap(col_idx[p], col_idx[col_info[j].end - 1]);
+          col_info[j].end -= 1;
+        } else {
+          p += 1;
+        }
+      }
+    }
+    for (Index ii = col_info[k].start; ii < col_info[k].end; ii++) {
+      mask[col_idx[ii]] = false;
+    }
+
+    if (l_size[k] != 0) {
+      for (Index jj = row_info.start; jj < row_info.end; jj++) {
+        const Index j = pivot_row_idx[jj];
+        col_idx[col_info[j].end] = k + nrows;
+        col_info[j].end += 1;
+      }
+    }
+  }
+
+  permutation.RestoreInverse();
+}
+
+inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_rows,
+                                  const std::vector<SparseVector> &ct_cols,
+                                  const std::vector<Scalar> &priority) {
+  // NoOrdering(ct_rows, ct_cols, priority, this->col_permutation_);
+  // SimpleOrdering(ct_rows, ct_cols, priority, this->col_permutation_);
+  // PriorityMarkowitzOrdering(ct_rows, ct_cols, priority,
+  // this->col_permutation_);
+  COLAMD(ct_rows, ct_cols, priority, this->col_permutation_);
 
   this->col_permutation_.AssertIntegrity();
 }
