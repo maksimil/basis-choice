@@ -1218,6 +1218,9 @@ struct COLAMDColInfo {
   Index l_size = 0;
 };
 
+constexpr Index kMaxTag = std::numeric_limits<Index>::max() / 4;
+
+// modified COLAMD with a different approximation
 inline void COLAMD(const std::vector<SparseVector> &rows,
                    const std::vector<SparseVector> &cols,
                    const std::vector<Scalar> &, Permutation &permutation) {
@@ -1242,6 +1245,9 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
   std::vector<Index> col_idx;
   col_idx.reserve(nnz);
 
+  Index tag = 0;
+  std::vector<Index> vw(nrows + ncols, 0);
+
   // initialize col_info, col_idx and scores with COLMMD
   for (Index j = 0; j < ncols; j++) {
     COLAMDColInfo &this_col = col_info[j];
@@ -1258,15 +1264,24 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
 
   std::vector<bool> mask(nrows + ncols, false);
 
-  for (Index k = 0; k < ncols; k++) {
-    Index piv = 0;
+  std::vector<Index> cands(ncols);
+  for (Index j = 0; j < ncols; j++) {
+    cands[j] = j;
+  }
+  const auto cands_cmp = [&](const Index &lhs, const Index &rhs) -> bool {
+    std::pair<Index, Index> lhs_pair, rhs_pair;
+    lhs_pair.first = col_info[lhs].score;
+    lhs_pair.second = lhs;
+    rhs_pair.first = col_info[rhs].score;
+    rhs_pair.second = rhs;
+    return lhs_pair < rhs_pair;
+  };
+  std::sort(cands.begin(), cands.end(), cands_cmp);
 
-    for (Index p = 1; p < ncols; p++) {
-      if (col_info[piv].chosen or
-          (!col_info[p].chosen and col_info[p].score < col_info[piv].score)) {
-        piv = p;
-      }
-    }
+  for (Index k = 0; k < ncols; k++) {
+    // --- column choice ---
+
+    const Index piv = cands[k];
 
     perm[k] = piv;
     col_info[piv].chosen = true;
@@ -1330,6 +1345,7 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
 
     // --- symbolic update ---
 
+    // set differences
     for (Index ii = col_info[piv].start; ii < col_info[piv].end; ii++) {
       mask[col_idx[ii]] = true;
     }
@@ -1352,11 +1368,83 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
       mask[col_idx[ii]] = false;
     }
 
+    // score update
+    Index next_tag = tag;
+
+    for (Index jj = prow.start; jj < prow.end; jj++) {
+      const Index j = pivot_row_idx[jj];
+
+      for (Index ii = col_info[j].start; ii < col_info[j].end; ii++) {
+        const Index i = col_idx[ii];
+
+        if (vw[i] < tag) {
+          Index size = 0;
+          if (i < nrows) {
+            size = rows[i].Size();
+          } else {
+            size =
+                pivot_row_info[i - nrows].end - pivot_row_info[i - nrows].start;
+          }
+          vw[i] = size + tag;
+          if (vw[i] > next_tag) {
+            next_tag = vw[i];
+          }
+        }
+
+        vw[i] -= 1;
+      }
+    }
+
+    for (Index jj = prow.start; jj < prow.end; jj++) {
+      const Index j = pivot_row_idx[jj];
+      const Index old_score = col_info[j].score;
+
+      assert(j < ncols);
+      assert(std::is_sorted(cands.begin() + k + 1, cands.end(), cands_cmp));
+
+      const Index cand_idx =
+          std::lower_bound(cands.begin() + k + 1, cands.end(), j, cands_cmp) -
+          cands.begin();
+
+      assert(cands[cand_idx] == j);
+
+      col_info[j].score = pivot_row_info[k].end - pivot_row_info[k].start - 1;
+
+      for (Index ii = col_info[j].start; ii < col_info[j].end; ii++) {
+        const Index i = col_idx[ii];
+        col_info[j].score += vw[i] - tag;
+      }
+
+      if (old_score < col_info[j].score) {
+        Index l = cand_idx;
+        while (l + 1 < ncols and cands_cmp(cands[l + 1], cands[l])) {
+          std::swap(cands[l], cands[l + 1]);
+          l++;
+        }
+      } else if (col_info[j].score < old_score) {
+        Index l = cand_idx;
+        while (l > k + 1 and cands_cmp(cands[l], cands[l - 1])) {
+          std::swap(cands[l - 1], cands[l]);
+          l--;
+        }
+      }
+    }
+
+    tag = next_tag;
+    if (tag > kMaxTag) {
+      tag = 0;
+      for (Index i = 0; i < nrows + ncols; i++) {
+        vw[i] = 0;
+      }
+    }
+
     if (col_info[piv].l_size != 0) {
       for (Index jj = prow.start; jj < prow.end; jj++) {
         const Index j = pivot_row_idx[jj];
+
         col_idx[col_info[j].end] = k + nrows;
         col_info[j].end += 1;
+
         assert(j == ncols - 1 || col_info[j].end <= col_info[j + 1].start);
         assert(j < ncols - 1 || col_info[j].end <= nnz);
       }
@@ -1371,9 +1459,8 @@ inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_rows,
                                   const std::vector<Scalar> &priority) {
   // NoOrdering(ct_rows, ct_cols, priority, this->col_permutation_);
   // SimpleOrdering(ct_rows, ct_cols, priority, this->col_permutation_);
-  // PriorityMarkowitzOrdering(ct_rows, ct_cols, priority,
-  // this->col_permutation_);
-  COLAMD(ct_rows, ct_cols, priority, this->col_permutation_);
+  PriorityMarkowitzOrdering(ct_rows, ct_cols, priority, this->col_permutation_);
+  // COLAMD(ct_rows, ct_cols, priority, this->col_permutation_);
 
   this->col_permutation_.AssertIntegrity();
 }
