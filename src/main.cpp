@@ -111,7 +111,7 @@ void TestColsWithPriority(const MtxData &cols,
               return priority[lhs] > priority[rhs];
             });
 
-  for (Scalar q : {0.5, 0.75, 0.9, 1.0}) {
+  for (Scalar q : {0.5, 0.75, 0.9, 0.99, 1.0}) {
     const Index k = std::ceil(q * cols.nrows) - 1;
     const Index p = -priority[vector_order[k]];
     const Index min_p = k;

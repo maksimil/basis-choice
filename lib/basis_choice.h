@@ -53,7 +53,7 @@ public:
   std::vector<Scalar> &GetValues() { return this->values_; }
   const std::vector<Scalar> &GetValues() const { return this->values_; }
 
-  Index size() const {
+  Index Size() const {
     assert(index_.size() == values_.size());
     return Index(index_.size());
   }
@@ -94,7 +94,7 @@ private:
 };
 
 inline bool IsSorted(const SparseVector &x) {
-  for (Index i = 1; i < x.size(); i++) {
+  for (Index i = 1; i < x.Size(); i++) {
     if (x.GetIndex()[i - 1] >= x.GetIndex()[i]) {
       return false;
     }
@@ -114,13 +114,13 @@ inline Scalar UsedMemory(const SparseVector &x) {
 }
 
 inline Index IndexMax(const SparseVector &x) {
-  if (x.size() == 0) {
+  if (x.Size() == 0) {
     return -1;
   }
 
   Index mx = x.GetIndex()[0];
 
-  for (Index k = 1; k < x.size(); k++) {
+  for (Index k = 1; k < x.Size(); k++) {
     if (mx < x.GetIndex()[k]) {
       mx = x.GetIndex()[k];
     }
@@ -131,7 +131,7 @@ inline Index IndexMax(const SparseVector &x) {
 
 inline std::vector<Scalar> SparseVector::ToDense(size_t out_size) const {
   std::vector<Scalar> res(out_size, 0.0);
-  for (Index i = 0; i < size(); ++i) {
+  for (Index i = 0; i < Size(); ++i) {
     assert(index_[i] < Index(out_size));
     res[index_[i]] = values_[i];
   }
@@ -145,7 +145,7 @@ inline Scalar SparseVector::operator*(const SparseVector &x) const {
   Scalar res = 0.0;
 
   Index i_le = 0, i_ri = 0;
-  while (i_le < this->size() and i_ri < x.size()) {
+  while (i_le < this->Size() and i_ri < x.Size()) {
     auto pos_le = this->index_[i_le];
     auto pos_ri = x.index_[i_ri];
     if (pos_le < pos_ri) {
@@ -166,7 +166,7 @@ inline Scalar SparseVector::operator*(const SparseVector &x) const {
 
 inline Scalar SparseVector::operator*(const std::vector<Scalar> &x) const {
   Scalar dot = 0.0;
-  for (Index k = 0; k < size(); ++k) {
+  for (Index k = 0; k < Size(); ++k) {
     dot += values_[k] * x[index_[k]];
   }
   return dot;
@@ -177,7 +177,7 @@ class SvIterator {
 public:
   inline explicit SvIterator(const SparseVector &v)
       : index_(v.GetIndex().data()), values_(v.GetValues().data()), ind_(0),
-        end_(v.size()) {}
+        end_(v.Size()) {}
 
   inline SvIterator &operator++() {
     ind_++;
@@ -346,29 +346,29 @@ inline void PermuteDense(std::vector<Scalar> &v, std::vector<Scalar> &swap,
 
 inline void SortSparse(SparseVector &v, std::vector<Index> &index_swap,
                        std::vector<Scalar> &scalar_swap) {
-  index_swap.resize(2 * v.size());
+  index_swap.resize(2 * v.Size());
 
-  for (Index i = 0; i < v.size(); i++) {
+  for (Index i = 0; i < v.Size(); i++) {
     index_swap[i] = i;
   }
 
-  std::sort(index_swap.begin(), index_swap.begin() + v.size(),
+  std::sort(index_swap.begin(), index_swap.begin() + v.Size(),
             [&](const Index &lhs, const Index &rhs) -> bool {
               return v.GetIndex()[lhs] < v.GetIndex()[rhs];
             });
 
-  for (Index i = 0; i < v.size(); i++) {
+  for (Index i = 0; i < v.Size(); i++) {
     scalar_swap[i] = v.GetValues()[index_swap[i]];
-    index_swap[v.size() + i] = v.GetIndex()[index_swap[i]];
+    index_swap[v.Size() + i] = v.GetIndex()[index_swap[i]];
   }
 
-  for (Index i = 0; i < v.size(); i++) {
+  for (Index i = 0; i < v.Size(); i++) {
     v.GetValues()[i] = scalar_swap[i];
-    v.GetIndex()[i] = index_swap[v.size() + i];
+    v.GetIndex()[i] = index_swap[v.Size() + i];
   }
 
 #ifndef NDEBUG
-  for (Index i = 1; i < v.size(); i++) {
+  for (Index i = 1; i < v.Size(); i++) {
     assert(v.GetIndex()[i - 1] < v.GetIndex()[i]);
   }
 #endif
@@ -379,7 +379,7 @@ inline void SortSparse(SparseVector &v, std::vector<Index> &index_swap,
 
 inline void PermuteSparse(SparseVector &v,
                           const std::vector<Index> &permutation) {
-  for (Index i = 0; i < v.size(); i++) {
+  for (Index i = 0; i < v.Size(); i++) {
     v.GetIndex()[i] = permutation[v.GetIndex()[i]];
   }
 }
@@ -590,7 +590,7 @@ private:
 template <class F> inline void PruneVector(SparseVector &v, F condition) {
   Index l = 0;
 
-  for (Index k = 0; k < v.size(); k++) {
+  for (Index k = 0; k < v.Size(); k++) {
     Scalar value = v.GetValues()[k];
     Index index = v.GetIndex()[k];
 
@@ -620,7 +620,7 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
   Index jmem = 0;
   Index pmem = 0;
 
-  while (jmem < jrow.size() && pmem < prow.size()) {
+  while (jmem < jrow.Size() && pmem < prow.Size()) {
     const Index jidx = jrow.GetIndex()[jmem];
     const Index pidx = prow.GetIndex()[pmem];
 
@@ -634,7 +634,7 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
                         tailcol.GetIndex().begin();
 
     if (jidx == pidx) {
-      assert(mem_p < tailcol.size());
+      assert(mem_p < tailcol.Size());
       assert(tailcol.GetIndex()[mem_p] == p);
       std::swap(tailcol.GetValues()[0], tailcol.GetValues()[mem_p]);
       tailcol.Erase(0);
@@ -658,9 +658,9 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
     }
   }
 
-  if (jmem < jrow.size()) {
-    assert(pmem == prow.size());
-    while (jmem < jrow.size()) {
+  if (jmem < jrow.Size()) {
+    assert(pmem == prow.Size());
+    while (jmem < jrow.Size()) {
       const Index jidx = jrow.GetIndex()[jmem];
       SparseVector &tailcol = tail[jidx];
       assert(IsSorted(tailcol));
@@ -681,9 +681,9 @@ inline void LUTailSwapRemoves(std::vector<SparseVector> &tail,
       jmem++;
     }
   } else {
-    assert(jmem == jrow.size());
+    assert(jmem == jrow.Size());
 
-    while (pmem < prow.size()) {
+    while (pmem < prow.Size()) {
       const Index pidx = prow.GetIndex()[pmem];
       SparseVector &tailcol = tail[pidx];
       assert(IsSorted(tailcol));
@@ -704,7 +704,7 @@ inline void LUBVectorCompute(SparseVector &b_vector,
 
   std::vector<Index> &memory_index = shared.clean_index_;
 
-  for (Index k = 0; k < b_vector.size(); k++) {
+  for (Index k = 0; k < b_vector.Size(); k++) {
     memory_index[b_vector.GetIndex()[k]] = k;
   }
 
@@ -718,7 +718,7 @@ inline void LUBVectorCompute(SparseVector &b_vector,
       // assert(i >= j);
 
       if (memory_index[i] == -1) {
-        memory_index[i] = b_vector.size();
+        memory_index[i] = b_vector.Size();
         b_vector.PushBack(i, -v);
       } else {
         b_vector.GetValues()[memory_index[i]] -= v;
@@ -726,7 +726,7 @@ inline void LUBVectorCompute(SparseVector &b_vector,
     }
   }
 
-  for (Index k = 0; k < b_vector.size(); k++) {
+  for (Index k = 0; k < b_vector.Size(); k++) {
     memory_index[b_vector.GetIndex()[k]] = -1;
   }
 
@@ -757,7 +757,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
   std::vector<Index> &nodes_stack = shared.dirty_index_;
 
   // fill-in computation
-  for (Index k = 0; k < x.size(); k++) {
+  for (Index k = 0; k < x.Size(); k++) {
     memory_index[x.GetIndex()[k]] = k;
     nodes_stack.push_back(x.GetIndex()[k]);
   }
@@ -772,7 +772,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
       assert(i > j);
 
       if (memory_index[i] == -1) {
-        memory_index[i] = x.size();
+        memory_index[i] = x.Size();
         x.PushBack(i, 0.0);
         nodes_stack.push_back(i);
       }
@@ -782,7 +782,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
   SortSparse(x, shared.dirty_index_, shared.dirty_scalar_);
 
   // compute the values
-  for (Index k = 0; k < x.size(); k++) {
+  for (Index k = 0; k < x.Size(); k++) {
     const Index i = x.GetIndex()[k];
 
     memory_index[i] = k;
@@ -799,7 +799,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
   }
 
   // clean up
-  for (Index k = 0; k < x.size(); k++) {
+  for (Index k = 0; k < x.Size(); k++) {
     memory_index[x.GetIndex()[k]] = -1;
   }
 
@@ -856,7 +856,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
   for (Index j = 0; j < this->dimension_; j++) {
     const Index reserve_size =
-        ct_cols[this->col_permutation_.Permute(j)].size();
+        ct_cols[this->col_permutation_.Permute(j)].Size();
     this->lcols_head_[j].Reserve(reserve_size);
     this->lcols_tail_[j].Reserve(reserve_size);
     this->ucols_[j].Reserve(reserve_size);
@@ -878,12 +878,12 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // split off the b_vector (b_vector is the b in the algorithm)
     Index upper_size = 0;
-    while (upper_size < upper_col.size() &&
+    while (upper_size < upper_col.Size() &&
            upper_col.GetIndex()[upper_size] < j) {
       upper_size++;
     }
 
-    for (Index k = upper_size; k < upper_col.size(); k++) {
+    for (Index k = upper_size; k < upper_col.Size(); k++) {
       b_vector.PushBack(upper_col.GetIndex()[k], upper_col.GetValues()[k]);
     }
 
@@ -899,7 +899,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     // --- pivot choice (line 5 of the algorithm) ---
 
     // returning if singular
-    if (b_vector.size() == 0) {
+    if (b_vector.Size() == 0) {
       return FactorizeResult::kSingular;
     }
 
@@ -909,7 +909,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     {
       // getting minimum absolute value of the pivot element
       Scalar b_tol = b_vector.GetValues()[0];
-      for (Index k = 1; k < b_vector.size(); k++) {
+      for (Index k = 1; k < b_vector.Size(); k++) {
         const Scalar b_abs = std::abs(b_vector.GetValues()[k]);
         if (b_abs > b_tol) {
           b_tol = b_abs;
@@ -919,7 +919,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
       // getting the first acceptable pivot
       mem_pivot = 0;
-      for (Index k = 0; k < b_vector.size(); k++) {
+      for (Index k = 0; k < b_vector.Size(); k++) {
         if (std::abs(b_vector.GetValues()[k]) > b_tol) {
           mem_pivot = k;
           break;
@@ -927,7 +927,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
       }
 
       // getting the best acceptable pivot
-      for (Index k = mem_pivot + 1; k < b_vector.size(); k++) {
+      for (Index k = mem_pivot + 1; k < b_vector.Size(); k++) {
         if (std::abs(b_vector.GetValues()[k]) <= b_tol) {
           continue;
         }
@@ -1055,21 +1055,21 @@ inline BasisChoiceStats BasisChoice::ComputeStats() const {
   // U is from ucols
   for (Index i = 0; i < this->dimension_; i++) {
     // stats.u_nnz += i;
-    stats.u_nnz += this->ucols_[i].size();
+    stats.u_nnz += this->ucols_[i].Size();
   }
   stats.u_sparse = Scalar(stats.u_nnz) / u_spaces;
 
   // L is from lrows
   for (Index i = 0; i < this->nvectors_; i++) {
     // stats.l_nnz += std::min(i, this->dimension_);
-    stats.l_nnz += this->lrows_[i].size();
+    stats.l_nnz += this->lrows_[i].Size();
   }
   stats.l_sparse =
       Scalar(stats.l_nnz) / (nvectors * dimension - u_spaces - dimension);
 
   // L1 is from lcols
   for (Index i = 0; i < this->dimension_; i++) {
-    stats.l1_nnz += this->lcols_head_[i].size();
+    stats.l1_nnz += this->lcols_head_[i].Size();
   }
   stats.l1_sparse = Scalar(stats.l1_nnz) / u_spaces;
 
@@ -1114,7 +1114,7 @@ inline void SimpleOrdering(const std::vector<SparseVector> &,
 
     col_metric[j] = priority[col.GetIndex()[0]];
 
-    for (Index k = 0; k < col.size(); k++) {
+    for (Index k = 0; k < col.Size(); k++) {
       if (priority[col.GetIndex()[k]] > col_metric[j]) {
         col_metric[j] = priority[col.GetIndex()[k]];
       }
@@ -1133,8 +1133,8 @@ inline void SimpleOrdering(const std::vector<SparseVector> &,
             [&](const Index &lhs, const Index &rhs) -> bool {
               std::pair<Scalar, Scalar> lhs_pair, rhs_pair;
 
-              lhs_pair = {-col_metric[lhs], cols[lhs].size()};
-              rhs_pair = {-col_metric[rhs], cols[rhs].size()};
+              lhs_pair = {-col_metric[lhs], cols[lhs].Size()};
+              rhs_pair = {-col_metric[rhs], cols[rhs].Size()};
 
               return lhs_pair < rhs_pair;
             });
@@ -1155,7 +1155,7 @@ inline void PriorityMarkowitzOrdering(const std::vector<SparseVector> &rows,
     Index i = cols[j].GetIndex()[0];
     row_size[i] += 1;
 
-    for (Index k = 1; k < cols[j].size(); k++) {
+    for (Index k = 1; k < cols[j].Size(); k++) {
       const Index ip = cols[j].GetIndex()[k];
       row_size[ip] += 1;
 
@@ -1193,9 +1193,9 @@ inline void PriorityMarkowitzOrdering(const std::vector<SparseVector> &rows,
         perm.begin() + start, perm.begin() + end,
         [&](const Index &lhs, const Index &rhs) -> bool {
           const Index lhs_markowitz =
-              (cols[lhs].size() - 1) * (row_size[col_max_priority[lhs]] - 1);
+              (cols[lhs].Size() - 1) * (row_size[col_max_priority[lhs]] - 1);
           const Index rhs_markowitz =
-              (cols[rhs].size() - 1) * (row_size[col_max_priority[rhs]] - 1);
+              (cols[rhs].Size() - 1) * (row_size[col_max_priority[rhs]] - 1);
           return lhs_markowitz < rhs_markowitz;
         });
   }
@@ -1216,6 +1216,8 @@ struct COLAMDColInfo {
 inline void COLAMD(const std::vector<SparseVector> &rows,
                    const std::vector<SparseVector> &cols,
                    const std::vector<Scalar> &, Permutation &permutation) {
+  std::vector<Index> &perm = permutation.GetPermutation();
+
   const Index nrows = rows.size();
   const Index ncols = cols.size();
 
@@ -1223,17 +1225,15 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
 
   Index nnz = 0;
   for (Index j = 0; j < ncols; j++) {
-    nnz += cols[j].size();
+    nnz += cols[j].Size();
   }
-
-  permutation.SetIdentity();
 
   std::vector<Index> l_size(ncols, 0);
   std::vector<COLAMDRowInfo> pivot_row_info(ncols);
   std::vector<COLAMDColInfo> col_info(ncols);
 
   std::vector<Index> pivot_row_idx;
-  pivot_row_idx.reserve(nnz);
+  pivot_row_idx.reserve(2 * nnz);
 
   std::vector<Index> col_idx;
   col_idx.reserve(nnz);
@@ -1252,20 +1252,24 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
   for (Index k = 0; k < ncols; k++) {
     COLAMDRowInfo &row_info = pivot_row_info[k];
 
-    // --- upper bound pattern of the pivot row and nnz in pivot col ---
+    const Index piv = k;
 
-    assert(l_size[k] == 0);
-    mask[k] = true;
+    perm[k] = piv;
+
+    // --- upper bound the pattern of the pivot row and nnz in pivot col ---
+
+    assert(l_size[piv] == 0);
+    mask[piv] = true;
     row_info.start = pivot_row_idx.size();
-    for (Index ii = col_info[k].start; ii < col_info[k].end; ii++) {
+    for (Index ii = col_info[piv].start; ii < col_info[piv].end; ii++) {
       Index i = col_idx[ii];
 
       if (i < nrows) {
-        l_size[k] += 1;
+        l_size[piv] += 1;
 
-        for (Index j : rows[i].GetIndex()) {
+        for (const Index j : rows[i].GetIndex()) {
           assert(j < ncols);
-          assert(j >= k);
+          // assert(j >= k);
           if (!mask[j]) {
             mask[j] = true;
             pivot_row_idx.push_back(j);
@@ -1274,13 +1278,13 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
       } else {
         i = i - nrows;
 
-        l_size[k] += l_size[i];
+        l_size[piv] += l_size[i];
 
         for (Index ii = pivot_row_info[i].start; ii < pivot_row_info[i].end;
              ii++) {
           const Index j = pivot_row_idx[ii];
           assert(j < ncols);
-          assert(j >= k);
+          // assert(j >= k);
           if (!mask[j]) {
             mask[j] = true;
             pivot_row_idx.push_back(j);
@@ -1289,16 +1293,16 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
       }
     }
     row_info.end = pivot_row_idx.size();
-    l_size[k] -= 1;
+    l_size[piv] -= 1;
 
-    mask[k] = false;
+    mask[piv] = false;
     for (Index jj = row_info.start; jj < row_info.end; jj++) {
       mask[pivot_row_idx[jj]] = false;
     }
 
     // --- symbolic update ---
 
-    for (Index ii = col_info[k].start; ii < col_info[k].end; ii++) {
+    for (Index ii = col_info[piv].start; ii < col_info[piv].end; ii++) {
       mask[col_idx[ii]] = true;
     }
     for (Index jj = row_info.start; jj < row_info.end; jj++) {
@@ -1306,6 +1310,9 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
       Index p = col_info[j].start;
       while (p < col_info[j].end) {
         if (mask[col_idx[p]]) {
+#ifndef NDEBUG
+          col_idx[p] = -1;
+#endif
           std::swap(col_idx[p], col_idx[col_info[j].end - 1]);
           col_info[j].end -= 1;
         } else {
@@ -1313,15 +1320,17 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
         }
       }
     }
-    for (Index ii = col_info[k].start; ii < col_info[k].end; ii++) {
+    for (Index ii = col_info[piv].start; ii < col_info[piv].end; ii++) {
       mask[col_idx[ii]] = false;
     }
 
-    if (l_size[k] != 0) {
+    if (l_size[piv] != 0) {
       for (Index jj = row_info.start; jj < row_info.end; jj++) {
         const Index j = pivot_row_idx[jj];
-        col_idx[col_info[j].end] = k + nrows;
+        col_idx[col_info[j].end] = piv + nrows;
         col_info[j].end += 1;
+        assert(j == ncols - 1 || col_info[j].end <= col_info[j + 1].start);
+        assert(j < ncols - 1 || col_info[j].end <= nnz);
       }
     }
   }
