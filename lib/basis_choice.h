@@ -1211,6 +1211,11 @@ struct COLAMDRowInfo {
 struct COLAMDColInfo {
   Index start = 0;
   Index end = 0;
+
+  Index score = 0;
+  bool chosen = false;
+
+  Index l_size = 0;
 };
 
 inline void COLAMD(const std::vector<SparseVector> &rows,
@@ -1228,7 +1233,6 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
     nnz += cols[j].Size();
   }
 
-  std::vector<Index> l_size(ncols, 0);
   std::vector<COLAMDRowInfo> pivot_row_info(ncols);
   std::vector<COLAMDColInfo> col_info(ncols);
 
@@ -1238,65 +1242,89 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
   std::vector<Index> col_idx;
   col_idx.reserve(nnz);
 
-  // initialize col_info and col_idx
+  // initialize col_info, col_idx and scores with COLMMD
   for (Index j = 0; j < ncols; j++) {
-    col_info[j].start = col_idx.size();
+    COLAMDColInfo &this_col = col_info[j];
+
+    assert(this_col.score == 0);
+
+    this_col.start = col_idx.size();
     for (Index i : cols[j].GetIndex()) {
       col_idx.push_back(i);
+      this_col.score += rows[i].Size() - 1;
     }
-    col_info[j].end = col_idx.size();
+    this_col.end = col_idx.size();
   }
 
   std::vector<bool> mask(nrows + ncols, false);
 
   for (Index k = 0; k < ncols; k++) {
-    COLAMDRowInfo &row_info = pivot_row_info[k];
+    Index piv = 0;
 
-    const Index piv = k;
+    for (Index p = 1; p < ncols; p++) {
+      if (col_info[piv].chosen or
+          (!col_info[p].chosen and col_info[p].score < col_info[piv].score)) {
+        piv = p;
+      }
+    }
 
     perm[k] = piv;
+    col_info[piv].chosen = true;
 
     // --- upper bound the pattern of the pivot row and nnz in pivot col ---
 
-    assert(l_size[piv] == 0);
+    COLAMDRowInfo &prow = pivot_row_info[k];
+
+    assert(col_info[piv].l_size == 0);
     mask[piv] = true;
-    row_info.start = pivot_row_idx.size();
+    prow.start = pivot_row_idx.size();
     for (Index ii = col_info[piv].start; ii < col_info[piv].end; ii++) {
       Index i = col_idx[ii];
 
+      assert(i < nrows + ncols);
+
       if (i < nrows) {
-        l_size[piv] += 1;
+        col_info[piv].l_size += 1;
 
         for (const Index j : rows[i].GetIndex()) {
           assert(j < ncols);
-          // assert(j >= k);
+          assert(j == piv || !col_info[j].chosen);
           if (!mask[j]) {
             mask[j] = true;
             pivot_row_idx.push_back(j);
+          } else {
           }
         }
       } else {
         i = i - nrows;
+        assert(i < k);
 
-        l_size[piv] += l_size[i];
+        assert(pivot_row_info[i].end != -1);
 
-        for (Index ii = pivot_row_info[i].start; ii < pivot_row_info[i].end;
-             ii++) {
-          const Index j = pivot_row_idx[ii];
+        col_info[piv].l_size += col_info[i].l_size;
+
+        for (Index jj = pivot_row_info[i].start; jj < pivot_row_info[i].end;
+             jj++) {
+          const Index j = pivot_row_idx[jj];
           assert(j < ncols);
-          // assert(j >= k);
+          assert(j == piv || !col_info[j].chosen);
           if (!mask[j]) {
             mask[j] = true;
             pivot_row_idx.push_back(j);
+          } else {
           }
         }
+
+#ifndef NDEBUG
+        pivot_row_info[i].end = -1;
+#endif
       }
     }
-    row_info.end = pivot_row_idx.size();
-    l_size[piv] -= 1;
+    prow.end = pivot_row_idx.size();
+    col_info[piv].l_size -= 1;
 
     mask[piv] = false;
-    for (Index jj = row_info.start; jj < row_info.end; jj++) {
+    for (Index jj = prow.start; jj < prow.end; jj++) {
       mask[pivot_row_idx[jj]] = false;
     }
 
@@ -1305,7 +1333,7 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
     for (Index ii = col_info[piv].start; ii < col_info[piv].end; ii++) {
       mask[col_idx[ii]] = true;
     }
-    for (Index jj = row_info.start; jj < row_info.end; jj++) {
+    for (Index jj = prow.start; jj < prow.end; jj++) {
       const Index j = pivot_row_idx[jj];
       Index p = col_info[j].start;
       while (p < col_info[j].end) {
@@ -1324,10 +1352,10 @@ inline void COLAMD(const std::vector<SparseVector> &rows,
       mask[col_idx[ii]] = false;
     }
 
-    if (l_size[piv] != 0) {
-      for (Index jj = row_info.start; jj < row_info.end; jj++) {
+    if (col_info[piv].l_size != 0) {
+      for (Index jj = prow.start; jj < prow.end; jj++) {
         const Index j = pivot_row_idx[jj];
-        col_idx[col_info[j].end] = piv + nrows;
+        col_idx[col_info[j].end] = k + nrows;
         col_info[j].end += 1;
         assert(j == ncols - 1 || col_info[j].end <= col_info[j + 1].start);
         assert(j < ncols - 1 || col_info[j].end <= nnz);
