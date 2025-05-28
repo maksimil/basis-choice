@@ -219,39 +219,6 @@ inline void PermuteDense(std::vector<Scalar> &v, std::vector<Scalar> &swap,
   swap.clear();
 }
 
-inline void SortSparse(SparseVector &v, std::vector<Index> &index_swap,
-                       std::vector<Scalar> &scalar_swap) {
-  index_swap.resize(2 * v.NonZeros());
-
-  for (Index i = 0; i < v.NonZeros(); i++) {
-    index_swap[i] = i;
-  }
-
-  std::sort(index_swap.begin(), index_swap.begin() + v.NonZeros(),
-            [&](const Index &lhs, const Index &rhs) -> bool {
-              return v.GetIndex()[lhs] < v.GetIndex()[rhs];
-            });
-
-  for (Index i = 0; i < v.NonZeros(); i++) {
-    scalar_swap[i] = v.GetValues()[index_swap[i]];
-    index_swap[v.NonZeros() + i] = v.GetIndex()[index_swap[i]];
-  }
-
-  for (Index i = 0; i < v.NonZeros(); i++) {
-    v.GetValues()[i] = scalar_swap[i];
-    v.GetIndex()[i] = index_swap[v.NonZeros() + i];
-  }
-
-#ifndef NDEBUG
-  for (Index i = 1; i < v.NonZeros(); i++) {
-    assert(v.GetIndex()[i - 1] < v.GetIndex()[i]);
-  }
-#endif
-
-  scalar_swap.clear();
-  index_swap.clear();
-}
-
 inline void PermuteSparse(SparseVector &v,
                           const std::vector<Index> &permutation) {
   for (Index i = 0; i < v.NonZeros(); i++) {
@@ -590,7 +557,7 @@ inline void LUBVectorCompute(SparseVector &b_vector,
   }
 
   b_vector.Erase(kEps);
-  SortSparse(b_vector, shared.dirty_index_, shared.dirty_scalar_);
+  b_vector.Sort();
   shared.AssertClean();
 }
 
@@ -641,7 +608,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
     }
   }
 
-  SortSparse(x, shared.dirty_index_, shared.dirty_scalar_);
+  x.Sort();
 
   // compute the values
   for (Index k = 0; k < x.NonZeros(); k++) {
@@ -737,8 +704,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     // applying already used partial pivoting row interchanges
     PermuteSparse(upper_col, this->row_permutation_.GetPermutation());
-    SortSparse(upper_col, this->shared_.dirty_index_,
-               this->shared_.dirty_scalar_);
+    upper_col.Sort();
 
     // --- split off and compute the upper part ---
 
