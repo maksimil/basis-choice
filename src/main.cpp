@@ -4,7 +4,7 @@
 #include <fstream>
 #include <random>
 
-#define CHECK_DECOMPOSITION
+// #define CHECK_DECOMPOSITION
 
 std::default_random_engine rng;
 
@@ -24,7 +24,7 @@ MtxData ReadColumns(const char *filename) {
   file >> ncols;
   file >> nnz;
 
-  std::vector<SparseVector> cols(ncols);
+  std::vector<SparseVector> cols(ncols, SparseVector(nrows));
 
   for (Index k = 0; k < nnz; k++) {
     Index i, j;
@@ -35,6 +35,10 @@ MtxData ReadColumns(const char *filename) {
     file >> v;
 
     cols[j].PushBack(i, v);
+  }
+
+  for (Index j = 0; j < ncols; j++) {
+    cols[j].Sort();
   }
 
   file.close();
@@ -81,6 +85,14 @@ void TestColsWithPriority(const MtxData &cols,
                           const std::vector<Scalar> &priority) {
   basis_choice::BasisChoice choice(cols.nrows, cols.ncols);
 
+  // for (Index c = 0; c < cols.ncols; c++) {
+  //   LOG_INFO("col[%i]:", c);
+  //   for (SvIterator el(cols.cols[c]); el; ++el) {
+  //     LOG_INFO(" (%i, %f)", el.index(), el.value());
+  //   }
+  //   LOG_INFO("\n");
+  // }
+
 #ifdef USE_EIGEN
   // Just to test conversions
   basis_choice::EigenSparseMatrix eigen_cols =
@@ -91,7 +103,7 @@ void TestColsWithPriority(const MtxData &cols,
   const std::vector<SparseVector> &mtx_cols = cols.cols;
 #endif
   Timer factorize_timer;
-  choice.Factorize(mtx_cols, priority);
+  basis_choice::FactorizeResult r = choice.Factorize(mtx_cols, priority);
   const double elapsed = factorize_timer.Elapsed();
   LOG_INFO("Factorized in %f ms\n", elapsed / 1000.0);
 
@@ -104,7 +116,18 @@ void TestColsWithPriority(const MtxData &cols,
 
   choice.ComputeStats().LogStats();
 
+  if (r == basis_choice::FactorizeResult::kSingular) {
+    LOG_INFO("Singular\n");
+    return;
+  }
+
   std::vector<Index> vector_order = choice.GetVectorOrder();
+
+  // LOG_INFO("order:");
+  // for (Index i = 0; i < cols.ncols; i++) {
+  //   LOG_INFO(" %2i", vector_order[i]);
+  // }
+  // LOG_INFO("\n");
 
   std::sort(vector_order.begin(), vector_order.begin() + cols.nrows,
             [&](const Index &lhs, const Index &rhs) -> bool {
@@ -112,17 +135,19 @@ void TestColsWithPriority(const MtxData &cols,
             });
 
   for (Scalar q : {0.5, 0.75, 0.9, 0.99, 1.0}) {
-    const Index k = std::ceil(q * cols.nrows) - 1;
+    const Index k = std::min(std::ceil(q * cols.nrows), Scalar(cols.nrows - 1));
     const Index p = -priority[vector_order[k]];
     const Index min_p = k;
     const Index max_p = cols.ncols - cols.nrows + k;
 
-    LOG_INFO("q=%5.1f%%, priority=%7i, deviation=%7i (<=%7i, %6.2f%%)\n",
-             q * 100.0, p, p - min_p, max_p - min_p,
+    LOG_INFO("q=%5.1f%% (%i), priority=%7i, deviation=%7i (<=%7i, %6.2f%%)\n",
+             q * 100.0, k, p, p - min_p, max_p - min_p,
              double(p - min_p) / double(max_p - min_p) * 100.0);
   }
 
 #ifdef CHECK_DECOMPOSITION
+  Timer check_timer;
+
   Scalar err_sum = 0.0;
   const Index kCheckRuns = 100;
 
@@ -170,6 +195,8 @@ void TestColsWithPriority(const MtxData &cols,
     //          check.err1 / check.rhs1);
   }
 
+  LOG_INFO("check took %fms\n", check_timer.Elapsed() / 1000);
+
   std::sort(
       errors.begin(), errors.end(),
       [](const Scalar &lhs, const Scalar &rhs) -> bool { return lhs < rhs; });
@@ -182,37 +209,44 @@ void TestColsWithPriority(const MtxData &cols,
 #endif
 }
 
-void TestCols(const MtxData &cols) {
-  std::vector<Scalar> priority(cols.ncols);
+struct TestCase {
+  const char *filename;
 
-  for (Index i = 0; i < cols.ncols; i++) {
-    priority[i] = -i;
-  }
+  std::vector<Scalar> priority;
 
-  for (Index k = 0; k < 3; k++) {
-    std::shuffle(priority.begin(), priority.end(), rng);
+  TestCase(const char *filename_) : filename(filename_), priority() {}
 
-    LOG_INFO("\x1B[34mPriority %2i\x1B[m\n", k);
-    TestColsWithPriority(cols, priority);
-  }
-}
-
-const char *test_files[] = {
-    "./test_data/sanity1.mtx",  "./test_data/sanity2.mtx",
-    "./test_data/sanity3.mtx",  "./test_data/PRIMAL1.mtx",
-    "./test_data/PRIMAL2.mtx",  "./test_data/PRIMAL3.mtx",
-    "./test_data/PRIMAL4.mtx",  "./test_data/AUG3D.mtx",
-    "./test_data/UBH1.mtx",     "./test_data/CONT-100.mtx",
-    "./test_data/CONT-101.mtx", "./test_data/CONT-200.mtx",
-    "./test_data/CONT-201.mtx", "./test_data/CONT-300.mtx",
-    "./test_data/BOYD1.mtx",
-    // "./test_data/BOYD2.mtx"
+  TestCase(const char *filename_, const std::vector<Scalar> &priority_)
+      : filename(filename_), priority(priority_) {}
 };
 
 int main(int, const char *[]) {
   rng = std::default_random_engine(42);
 
-  for (const char *filename : test_files) {
+  const std::vector<TestCase> tests = {
+      TestCase("./test_data/sanity1.mtx"),
+      TestCase("./test_data/sanity2.mtx"),
+      TestCase("./test_data/sanity3.mtx"),
+      TestCase("./test_data/sanity4.mtx", {0.05, 0.05, 0.85, 0.05}),
+      TestCase("./test_data/PRIMAL1.mtx"),
+      TestCase("./test_data/PRIMAL2.mtx"),
+      TestCase("./test_data/PRIMAL3.mtx"),
+      TestCase("./test_data/PRIMAL4.mtx"),
+      TestCase("./test_data/AUG3D.mtx"),
+      TestCase("./test_data/UBH1.mtx"),
+      TestCase("./test_data/CONT-100.mtx"),
+      TestCase("./test_data/CONT-101.mtx"),
+      TestCase("./test_data/CONT-200.mtx"),
+      TestCase("./test_data/CONT-201.mtx"),
+      TestCase("./test_data/CONT-300.mtx"),
+      TestCase("./test_data/BOYD1.mtx"),
+      // TestCase("./test_data/BOYD2.mtx"),
+  };
+
+  for (const TestCase &test : tests) {
+    const char *filename = test.filename;
+    std::vector<Scalar> priority = test.priority;
+
     MtxData data = ReadColumns(filename);
     Scalar sparsity =
         Scalar(data.nnz) / (Scalar(data.nrows) * Scalar(data.ncols));
@@ -222,7 +256,7 @@ int main(int, const char *[]) {
              data.nnz, sparsity * 100.0);
 
     // append an identity matrix
-    data.cols.resize(data.ncols + data.nrows);
+    data.cols.resize(data.ncols + data.nrows, SparseVector(data.nrows));
     for (Index i = 0; i < data.nrows; i++) {
       data.cols[data.ncols + i].PushBack(i, 1.0);
     }
@@ -234,7 +268,24 @@ int main(int, const char *[]) {
         "nrows=%6d, ncols=%6d, nnz=%8d (%.4f%%) (after appending identity)\n",
         data.nrows, data.ncols, data.nnz, sparsity * 100.0);
 
-    TestCols(data);
+    if (priority.size() == 0) {
+      priority.resize(data.ncols);
+
+      for (Index i = 0; i < data.ncols; i++) {
+        priority[i] = -i;
+      }
+
+      for (Index k = 0; k < 3; k++) {
+        std::shuffle(priority.begin(), priority.end(), rng);
+
+        LOG_INFO("\x1B[34mRandom  Priority %2i\x1B[m\n", k);
+        TestColsWithPriority(data, priority);
+      }
+    } else {
+      assert(Index(priority.size()) == data.ncols);
+      LOG_INFO("\x1B[34mDefined Priority\x1B[m\n");
+      TestColsWithPriority(data, priority);
+    }
   }
 
   return 0;

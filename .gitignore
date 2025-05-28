@@ -24,3 +24,6 @@ test_data/*.mtx
 
 # flamegraphs
 flamegraphs
+
+# proprietary
+lib/sparse_vector.h
