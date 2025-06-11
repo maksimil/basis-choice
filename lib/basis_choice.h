@@ -591,9 +591,11 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
     nodes_stack.push_back(x.GetIndex()[k]);
   }
 
-  while (!nodes_stack.empty()) {
-    const Index j = nodes_stack.back();
-    nodes_stack.pop_back();
+  const Index initial_stack_size = nodes_stack.size();
+
+  Index jj = 0;
+  while (jj < Index(nodes_stack.size())) {
+    const Index j = nodes_stack[jj];
 
     for (SvIterator el(lcols[j]); el; ++el) {
       const Index i = el.index();
@@ -601,12 +603,21 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
       assert(i > j);
 
       if (memory_index[i] == -1) {
-        memory_index[i] = x.NonZeros();
-        x.PushBack(i, 0.0);
+        memory_index[i] = nodes_stack.size();
         nodes_stack.push_back(i);
       }
     }
+
+    jj++;
   }
+
+  x.Reserve(nodes_stack.size());
+  for (Index jj = initial_stack_size; jj < Index(nodes_stack.size()); jj++) {
+    x.PushBack(nodes_stack[jj], 0.0);
+  }
+  assert(x.NonZeros() == Index(nodes_stack.size()));
+
+  nodes_stack.clear();
 
   x.Sort();
 
@@ -692,7 +703,6 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
     this->lcols_head_[j].Reserve(reserve_size);
     this->lcols_tail_[j].Reserve(reserve_size);
-    this->ucols_[j].Reserve(reserve_size);
   }
 
   for (Index j = 0; j < this->dimension_; j++) {
@@ -725,9 +735,11 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     assert(upper_col.Size() == this->dimension_);
 
     // line 3 of the algorithm (computing the upper column)
+#ifndef NDEBUG
     for (Index i = 0; i < this->nvectors_; i++) {
       assert(this->lrows_[i].Size() == this->dimension_);
     }
+#endif
     assert(Index(this->lcols_head_.size()) == this->dimension_);
     assert(Index(this->lrows_.size()) == this->nvectors_);
     LUFTranL(this->lcols_head_, this->lrows_, upper_col, this->shared_);
