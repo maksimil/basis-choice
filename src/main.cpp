@@ -4,7 +4,8 @@
 #include <fstream>
 #include <random>
 
-// #define CHECK_DECOMPOSITION
+#define CHECK_DECOMPOSITION
+#define LOG_TABLE(...) fprintf(stderr, __VA_ARGS__)
 
 std::default_random_engine rng;
 
@@ -81,10 +82,17 @@ RhsCheck CheckRhs(const MtxData &cols, const basis_choice::BasisChoice &choice,
   return check;
 }
 
-void TestColsWithPriority(const MtxData &cols,
-                          const std::vector<Scalar> &priority) {
-  basis_choice::BasisChoice choice(cols.nrows, cols.ncols);
+struct TestReport {
+  Scalar factor_time;
+  Scalar core_sparsity;
+  Scalar q99_deviation;
+  Scalar avg_err = -1;
+  Scalar max_err = -1;
+};
 
+TestReport TestColsWithPriority(const MtxData &cols,
+                                const std::vector<Scalar> &priority) {
+  TestReport report;
   // for (Index c = 0; c < cols.ncols; c++) {
   //   LOG_INFO("col[%i]:", c);
   //   for (SvIterator el(cols.cols[c]); el; ++el) {
@@ -103,9 +111,11 @@ void TestColsWithPriority(const MtxData &cols,
   const std::vector<SparseVector> &mtx_cols = cols.cols;
 #endif
   Timer factorize_timer;
+  basis_choice::BasisChoice choice(cols.nrows, cols.ncols);
   basis_choice::FactorizeResult r = choice.Factorize(mtx_cols, priority);
   const double elapsed = factorize_timer.Elapsed();
   LOG_INFO("Factorized in %f ms\n", elapsed / 1000.0);
+  report.factor_time = elapsed / 1000;
 
   // if (cols.nrows * cols.ncols < 1e8) {
   //   const bool v = choice.CheckFactorization(cols.cols, 1e-10);
@@ -114,11 +124,13 @@ void TestColsWithPriority(const MtxData &cols,
   //   LOG_INFO("Skip check\n");
   // }
 
-  choice.ComputeStats().LogStats();
+  basis_choice::BasisChoiceStats stats = choice.ComputeStats();
+  stats.LogStats();
+  report.core_sparsity = (stats.l1_sparse + stats.u_sparse) / 2 * 100;
 
   if (r == basis_choice::FactorizeResult::kSingular) {
     LOG_INFO("Singular\n");
-    return;
+    return report;
   }
 
   std::vector<Index> vector_order = choice.GetVectorOrder();
@@ -143,13 +155,16 @@ void TestColsWithPriority(const MtxData &cols,
     LOG_INFO("q=%5.1f%% (%i), priority=%7i, deviation=%7i (<=%7i, %6.2f%%)\n",
              q * 100.0, k, p, p - min_p, max_p - min_p,
              double(p - min_p) / double(max_p - min_p) * 100.0);
+
+    if (q == 0.99)
+      report.q99_deviation = double(p - min_p) / double(max_p - min_p) * 100.0;
   }
 
 #ifdef CHECK_DECOMPOSITION
   Timer check_timer;
 
   Scalar err_sum = 0.0;
-  const Index kCheckRuns = 100;
+  const Index kCheckRuns = 10;
 
   std::vector<Scalar> errors;
   errors.reserve(3 * kCheckRuns);
@@ -206,7 +221,12 @@ void TestColsWithPriority(const MtxData &cols,
            err_sum / (3 * kCheckRuns), errors[0],
            errors[3 * kCheckRuns * 1 / 4], errors[3 * kCheckRuns * 2 / 4],
            errors[3 * kCheckRuns * 3 / 4], errors[3 * kCheckRuns - 1]);
+
+  report.avg_err = err_sum / (3 * kCheckRuns);
+  report.max_err = errors[3 * kCheckRuns - 1];
 #endif
+
+  return report;
 }
 
 struct TestCase {
@@ -243,6 +263,12 @@ int main(int, const char *[]) {
       // TestCase("./test_data/BOYD2.mtx"),
   };
 
+#ifdef LOG_TABLE
+  LOG_TABLE("%25s; Run; Factor time, ms; Initial sparse, %%; Core sparse, %%; "
+            "Q99 deviation, %%; Average error;  Max error\n",
+            "Test");
+#endif
+
   for (const TestCase &test : tests) {
     const char *filename = test.filename;
     std::vector<Scalar> priority = test.priority;
@@ -268,6 +294,17 @@ int main(int, const char *[]) {
         "nrows=%6d, ncols=%6d, nnz=%8d (%.4f%%) (after appending identity)\n",
         data.nrows, data.ncols, data.nnz, sparsity * 100.0);
 
+#ifdef LOG_TABLE
+    auto process_report = [&](const Index k, const TestReport report) -> void {
+      LOG_TABLE("%25s;%4d;%16.4f;%18.4f;%15.4f;%17.4f;%14.4e;%11.4e\n",
+                filename, k, report.factor_time, sparsity * 100,
+                report.core_sparsity, report.q99_deviation, report.avg_err,
+                report.max_err);
+    };
+#else
+    auto process_report = [&](const Index, const TestReport) -> void {};
+#endif
+
     if (priority.size() == 0) {
       priority.resize(data.ncols);
 
@@ -279,12 +316,14 @@ int main(int, const char *[]) {
         std::shuffle(priority.begin(), priority.end(), rng);
 
         LOG_INFO("\x1B[34mRandom  Priority %2i\x1B[m\n", k);
-        TestColsWithPriority(data, priority);
+        TestReport report = TestColsWithPriority(data, priority);
+        process_report(k, report);
       }
     } else {
       assert(Index(priority.size()) == data.ncols);
       LOG_INFO("\x1B[34mDefined Priority\x1B[m\n");
-      TestColsWithPriority(data, priority);
+      TestReport report = TestColsWithPriority(data, priority);
+      process_report(-1, report);
     }
   }
 
