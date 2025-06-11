@@ -88,6 +88,7 @@ struct TestReport {
   Scalar q99_deviation;
   Scalar avg_err = -1;
   Scalar max_err = -1;
+  Scalar waste;
 };
 
 TestReport TestColsWithPriority(const MtxData &cols,
@@ -127,6 +128,8 @@ TestReport TestColsWithPriority(const MtxData &cols,
   basis_choice::BasisChoiceStats stats = choice.ComputeStats();
   stats.LogStats();
   report.core_sparsity = (stats.l1_sparse + stats.u_sparse) / 2 * 100;
+  report.waste = (stats.allocated_size - stats.used_size) /
+                 Scalar(stats.allocated_size) * 100;
 
   if (r == basis_choice::FactorizeResult::kSingular) {
     LOG_INFO("Singular\n");
@@ -265,7 +268,7 @@ int main(int, const char *[]) {
 
 #ifdef LOG_TABLE
   LOG_TABLE("%25s; Run; Factor time, ms; Initial sparse, %%; Core sparse, %%; "
-            "Q99 deviation, %%; Average error;  Max error\n",
+            "Q99 deviation, %%; Average error;  Max error; Waste, %%\n",
             "Test");
 #endif
 
@@ -296,10 +299,10 @@ int main(int, const char *[]) {
 
 #ifdef LOG_TABLE
     auto process_report = [&](const Index k, const TestReport report) -> void {
-      LOG_TABLE("%25s;%4d;%16.4f;%18.4f;%15.4f;%17.4f;%14.4e;%11.4e\n",
+      LOG_TABLE("%25s;%4d;%16.4f;%18.4f;%15.4f;%17.4f;%14.4e;%11.4e;%9.4f\n",
                 filename, k, report.factor_time, sparsity * 100,
                 report.core_sparsity, report.q99_deviation, report.avg_err,
-                report.max_err);
+                report.max_err, report.waste);
     };
 #else
     auto process_report = [&](const Index, const TestReport) -> void {};

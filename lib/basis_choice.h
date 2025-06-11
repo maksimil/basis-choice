@@ -680,7 +680,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
 // Statistical Computing, vol. 9, no. 5, pp. 862-874, 1988,
 // doi: 10.1137/0909058.
 inline FactorizeResult
-BasisChoice::ComputeLU(const std::vector<SparseVector> &,
+BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_rows,
                        const std::vector<SparseVector> &ct_cols,
                        const std::vector<Scalar> &priority) {
   // --- this function assumes ---
@@ -706,6 +706,18 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &,
 
     this->lcols_head_[j].Reserve(reserve_size);
     this->lcols_tail_[j].Reserve(reserve_size);
+  }
+
+  {
+    Scalar average_size = 0;
+    for (Index i = 0; i < this->nvectors_; i++) {
+      average_size += ct_rows[i].NonZeros();
+    }
+    average_size /= this->nvectors_;
+
+    for (Index i = 0; i < this->nvectors_; i++) {
+      this->lrows_[i].Reserve(2 * average_size);
+    }
   }
 
   for (Index j = 0; j < this->dimension_; j++) {
@@ -839,7 +851,14 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &,
     // line 7 of the algorithm (add the new col to lower rows)
     for (SvIterator el(b_vector); el; ++el) {
       assert(el.index() > j);
-      this->lrows_[el.index()].PushBack(j, el.value() / this->udiagonal_[j]);
+      SparseVector &lrow = this->lrows_[el.index()];
+      if (lrow.data().capacity() == lrow.NonZeros()) {
+        lrow.Reserve(3 * (lrow.NonZeros() + 1));
+      }
+      lrow.PushBack(j, el.value() / this->udiagonal_[j]);
+    }
+
+    for (SvIterator el(b_vector); el; ++el) {
       this->lcols_tail_[j].PushBack(el.index(),
                                     el.value() / this->udiagonal_[j]);
     }
