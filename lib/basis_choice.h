@@ -339,7 +339,7 @@ public:
     this->ComputeQ(ct_rows, ct_cols, priority);
 
     // compute factorization
-    const FactorizeResult r = this->ComputeLU(ct_cols, priority);
+    const FactorizeResult r = this->ComputeLU(ct_rows, ct_cols, priority);
 
     return r;
   }
@@ -348,7 +348,8 @@ public:
                 const std::vector<SparseVector> &ct_cols,
                 const std::vector<Scalar> &priority);
 
-  FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_cols,
+  FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_rows,
+                            const std::vector<SparseVector> &ct_cols,
                             const std::vector<Scalar> &priority);
 
   // An array of indices with basis in the beginning:
@@ -679,7 +680,8 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
 // Statistical Computing, vol. 9, no. 5, pp. 862-874, 1988,
 // doi: 10.1137/0909058.
 inline FactorizeResult
-BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
+BasisChoice::ComputeLU(const std::vector<SparseVector> &,
+                       const std::vector<SparseVector> &ct_cols,
                        const std::vector<Scalar> &priority) {
   // --- this function assumes ---
   // row_permutation_ is any
@@ -694,6 +696,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
 
   this->row_permutation_.SetIdentity();
 
+  // --- reserve memory ---
   SparseVector b_vector(this->nvectors_);
   b_vector.Reserve(this->nvectors_);
 
@@ -846,13 +849,31 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_cols,
     b_vector.data().clear();
   }
 
-  // compute upper rows
+  // --- compute upper rows ---
+  std::vector<Index> &row_sizes = this->shared_.dirty_index_;
+  row_sizes.resize(this->dimension_);
+
+  for (Index i = 0; i < this->dimension_; i++) {
+    row_sizes[i] = 0;
+  }
+
+  for (Index j = 0; j < this->dimension_; j++) {
+    for (SvIterator el(this->ucols_[j]); el; ++el) {
+      row_sizes[el.index()]++;
+    }
+  }
+
+  for (Index i = 0; i < this->dimension_; i++) {
+    this->urows_[i].Reserve(row_sizes[i]);
+  }
+
   for (Index j = 0; j < this->dimension_; j++) {
     for (SvIterator el(this->ucols_[j]); el; ++el) {
       assert(el.index() < this->dimension_);
       this->urows_[el.index()].PushBack(j, el.value());
     }
   }
+  row_sizes.clear();
 
   return FactorizeResult::kOk;
 }
