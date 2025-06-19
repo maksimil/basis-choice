@@ -322,18 +322,21 @@ public:
         urows_(dimension, SparseVector(dimension)), ucols_(dimension),
         udiagonal_(dimension, 0.0), shared_(dimension, nvectors) {}
 
-  // factorize in terms of input vectors
-  // priority is defined for each col (smaller value = higher priority)
+  // Factorize in terms of input vectors
+  // Priority is defined for each col (smaller value = higher priority)
   FactorizeResult Factorize(const std::vector<SparseVector> &vectors,
                             const std::vector<Scalar> &priority) {
-    const std::vector<SparseVector> row_rep =
+    std::vector<SparseVector> row_rep =
         ComputeRowRepresentation(vectors, this->dimension_);
     return this->FactorizeCT(vectors, row_rep, priority);
   }
 
-  // factorize in terms of rows of input vectors
+  // Factorize in terms of rows and cols of input vectors
+  // Use this if you have a mutable row representation of the problem, ct_rows
+  // is vectors, ct_cols is their row representation (c is the matrix of
+  // vectors, ct is its transpose).
   FactorizeResult FactorizeCT(const std::vector<SparseVector> &ct_rows,
-                              const std::vector<SparseVector> &ct_cols,
+                              std::vector<SparseVector> &ct_cols,
                               const std::vector<Scalar> &priority) {
     // compute col permutation
     this->ComputeQ(ct_rows, ct_cols, priority);
@@ -349,7 +352,7 @@ public:
                 const std::vector<Scalar> &priority);
 
   FactorizeResult ComputeLU(const std::vector<SparseVector> &ct_rows,
-                            const std::vector<SparseVector> &ct_cols,
+                            std::vector<SparseVector> &ct_cols,
                             const std::vector<Scalar> &priority);
 
   // An array of indices with basis in the beginning:
@@ -681,7 +684,7 @@ inline void LUFTranL(const std::vector<SparseVector> &lcols,
 // doi: 10.1137/0909058.
 inline FactorizeResult
 BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_rows,
-                       const std::vector<SparseVector> &ct_cols,
+                       std::vector<SparseVector> &ct_cols,
                        const std::vector<Scalar> &priority) {
   // --- this function assumes ---
   // row_permutation_ is any
@@ -725,7 +728,7 @@ BasisChoice::ComputeLU(const std::vector<SparseVector> &ct_rows,
 
     // get the next column according to the column permutation
     SparseVector &upper_col = this->ucols_[j];
-    upper_col = ct_cols[this->col_permutation_.Permute(j)];
+    std::swap(upper_col, ct_cols[this->col_permutation_.Permute(j)]);
 
     // applying already used partial pivoting row interchanges
     PermuteSparse(upper_col, this->row_permutation_.GetPermutation());
@@ -1058,30 +1061,12 @@ inline void PriorityMarkowitzOrdering(const std::vector<SparseVector> &rows,
   permutation.RestoreInverse();
 }
 
-struct COLAMDRowInfo {
-  Index start = 0;
-  Index end = 0;
-};
-
-struct COLAMDColInfo {
-  Index start = 0;
-  Index end = 0;
-
-  Index score = 0;
-  bool chosen = false;
-
-  Index l_size = 0;
-};
-
-constexpr Index kMaxTag = std::numeric_limits<Index>::max() / 4;
-
 inline void BasisChoice::ComputeQ(const std::vector<SparseVector> &ct_rows,
                                   const std::vector<SparseVector> &ct_cols,
                                   const std::vector<Scalar> &priority) {
   // NoOrdering(ct_rows, ct_cols, priority, this->col_permutation_);
   // SimpleOrdering(ct_rows, ct_cols, priority, this->col_permutation_);
   PriorityMarkowitzOrdering(ct_rows, ct_cols, priority, this->col_permutation_);
-  // COLAMD(ct_rows, ct_cols, priority, this->col_permutation_);
 
   this->col_permutation_.AssertIntegrity();
 }
